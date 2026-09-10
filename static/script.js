@@ -167,15 +167,26 @@ function renderRuler() {
   }
 }
 
+// ルーラーの目盛り(5秒間隔)と同じ位置に、トラック全体を貫通するグリッド線を描画する
+function renderGridLines(total) {
+  for (let s = 0; s <= total; s += 5) {
+    const line = document.createElement("div");
+    line.className = "grid-line";
+    line.style.left = `${LABEL_WIDTH + s * PX_PER_SEC}px`;
+    el.tracksContainer.appendChild(line);
+  }
+}
+
 function renderAll() {
   el.emptyHint.style.display = state.tracks.length === 0 ? "block" : "none";
   renderRuler();
   updateTimeDisplay();
 
-  // 既存の track-row / playhead を削除して再構築
-  el.tracksContainer.querySelectorAll(".track-row, .playhead").forEach((n) => n.remove());
+  // 既存の track-row / grid-line / playhead を削除して再構築
+  el.tracksContainer.querySelectorAll(".track-row, .grid-line, .playhead").forEach((n) => n.remove());
 
   const total = timelineTotalDuration();
+  renderGridLines(total);
 
   for (const track of state.tracks) {
     const row = document.createElement("div");

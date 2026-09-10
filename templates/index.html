@@ -31,17 +31,20 @@
     </div>
   </header>
 
-  <div id="status" class="status"></div>
-
   <main class="editor">
-    <div class="ruler-wrap">
-      <div class="track-labels-spacer"></div>
-      <div id="ruler" class="ruler"></div>
-    </div>
-    <div id="tracksContainer" class="tracks-container">
-      <div class="empty-hint" id="emptyHint">
-        「+ ファイルを追加」から音声ファイルを選ぶと、ここに新しいトラックが追加されます。<br>
-        クリップはドラッグで移動、端をドラッグでトリミング、再生ヘッド位置で「カット」できます。
+    <div class="workspace" id="workspace">
+      <div id="status" class="status"></div>
+      <div class="workspace-body">
+        <div class="ruler-wrap">
+          <div class="track-labels-spacer"></div>
+          <div id="ruler" class="ruler"></div>
+        </div>
+        <div id="tracksContainer" class="tracks-container">
+          <div class="empty-hint" id="emptyHint">
+            「+ ファイルを追加」から音声ファイルを選ぶと、ここに新しいトラックが追加されます。<br>
+            クリップはドラッグで移動、端をドラッグでトリミング、再生ヘッド位置で「カット」できます。
+          </div>
+        </div>
       </div>
     </div>
   </main>
