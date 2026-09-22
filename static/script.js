@@ -12,6 +12,7 @@ const state = {
   isPlaying: false,
   bufferCache: {},     // fileId -> Promise<AudioBuffer> (デコード済み音声データ、クリップ間で共有)
   activeSources: [],   // 再生中のAudioBufferSourceNode一覧
+  activeGainNodes: {}, // trackId -> GainNode (再生中のトラック音量を反映するためのノード)
   rafId: null,
   playStartCtxTime: 0, // 再生開始時のAudioContext.currentTime
   _playStartSec: 0,    // 再生開始時点のタイムライン上の秒数
@@ -22,6 +23,7 @@ let trackCounter = 0;
 
 const el = {
   fileInput: document.getElementById("fileInput"),
+  fileBtnLabel: document.querySelector(".file-btn"),
   tracksContainer: document.getElementById("tracksContainer"),
   ruler: document.getElementById("ruler"),
   emptyHint: document.getElementById("emptyHint"),
@@ -35,6 +37,12 @@ const el = {
   formatSelect: document.getElementById("formatSelect"),
   currentTimeLabel: document.getElementById("currentTimeLabel"),
   totalTimeLabel: document.getElementById("totalTimeLabel"),
+  joinModal: document.getElementById("joinModal"),
+  joinNameInput: document.getElementById("joinNameInput"),
+  joinBtn: document.getElementById("joinBtn"),
+  myRoleBadge: document.getElementById("myRoleBadge"),
+  editorInfo: document.getElementById("editorInfo"),
+  collabActions: document.getElementById("collabActions"),
 };
 
 function setStatus(msg, isError = false) {
@@ -47,6 +55,243 @@ function fmtTime(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// ---------- 共同編集(オンライン編集) ----------
+// サーバー(app.py)が「正」のプロジェクト状態(トラック/クリップ配置)を持ち、
+// 「編集権」を持つ1人のユーザーだけがそれを書き換えられる(トークンパッシング方式)。
+// 役割: host(承認/剥奪ができる) / editor(今まさに編集できる1人) / viewer(閲覧のみ)。
+// ユーザーの識別にはログインを使わず、ブラウザごとに生成した匿名トークンを使う。
+
+const ROLE_LABEL = { host: "ホスト", editor: "編集者", viewer: "閲覧者" };
+
+const collab = {
+  token: localStorage.getItem("daw_user_token") || generateToken(),
+  name: "",
+  hostToken: null,
+  editorToken: null,
+  users: [],
+  pending: [],
+  socket: null,
+};
+localStorage.setItem("daw_user_token", collab.token);
+
+function generateToken() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isEditor() {
+  return !!collab.editorToken && collab.token === collab.editorToken;
+}
+function isHost() {
+  return !!collab.hostToken && collab.token === collab.hostToken;
+}
+function myRole() {
+  if (isHost()) return "host";
+  if (isEditor()) return "editor";
+  return "viewer";
+}
+
+// 編集権を持つ人の操作だけをサーバーへ送信し、全員へ配信してもらう。
+// (閲覧者からの呼び出しは isEditor() チェックで何もしない)
+function syncProject() {
+  if (!collab.socket || !isEditor()) return;
+  collab.socket.emit("project_sync", { token: collab.token, tracks: state.tracks });
+}
+
+// サーバーから届いたプロジェクト状態(トラック/クリップ配置)を自分の画面に反映する
+function applyRemoteProjectState(data) {
+  state.tracks = (data && data.tracks) || [];
+  ensureTrackDefaults(state.tracks);
+  syncCountersFromTracks(state.tracks);
+  if (state.selectedClipId && !findClip(state.selectedClipId)) {
+    state.selectedClipId = null;
+  }
+  for (const track of state.tracks) {
+    for (const clip of track.clips) {
+      loadBuffer(clip.fileId, clip.url).catch(() => {});
+    }
+  }
+  renderAll();
+}
+
+// 古いプロジェクトデータ(volume/muted/soloフィールドが無いトラックなど)にも対応するための補完
+function ensureTrackDefaults(tracks) {
+  for (const track of tracks) {
+    if (typeof track.volume !== "number" || Number.isNaN(track.volume)) {
+      track.volume = 1;
+    }
+    if (typeof track.muted !== "boolean") track.muted = false;
+    if (typeof track.solo !== "boolean") track.solo = false;
+  }
+}
+
+// いずれかのトラックがソロ中かどうか
+function anySolo(tracks) {
+  return tracks.some((t) => t.solo);
+}
+
+// 「実際に鳴るべきかどうか」を判定する。
+// ソロ中のトラックが1つでもあれば、ソロされていないトラックは(ミュートの有無に関わらず)自動的に無音になる。
+function isEffectivelyMuted(track, tracks) {
+  if (anySolo(tracks)) return !track.solo;
+  return track.muted;
+}
+
+// 現在再生中の全トラックのGainNodeに、最新のミュート/ソロ/音量を反映する。
+// (再生中にフェーダーやM/Sボタンを操作した際、その場で音に反映するために呼ぶ)
+function applyLiveMixToActiveNodes() {
+  for (const track of state.tracks) {
+    const gainNode = state.activeGainNodes[track.trackId];
+    if (!gainNode) continue;
+    const vol = isEffectivelyMuted(track, state.tracks) ? 0 : track.volume ?? 1;
+    gainNode.gain.value = vol;
+  }
+}
+
+// 編集権が別の人に移った直後などにIDカウンターがリセットされたままだと、
+// 新しい編集者が作るトラック/クリップのIDが既存のものと衝突しうるため、
+// 受け取ったプロジェクト内の最大値までカウンターを進めておく
+function syncCountersFromTracks(tracks) {
+  let maxTrack = trackCounter;
+  let maxClip = clipCounter;
+  for (const track of tracks) {
+    const tn = parseInt(String(track.trackId).replace(/^t/, ""), 10);
+    if (!Number.isNaN(tn) && tn > maxTrack) maxTrack = tn;
+    for (const clip of track.clips) {
+      const cn = parseInt(String(clip.clipId).replace(/^c/, ""), 10);
+      if (!Number.isNaN(cn) && cn > maxClip) maxClip = cn;
+    }
+  }
+  trackCounter = maxTrack;
+  clipCounter = maxClip;
+}
+
+// 役割(host/editor/viewer)に応じて編集系UIの有効/無効を切り替える
+function updateEditPermissionUI() {
+  const editing = isEditor();
+  [el.cutBtn, el.deleteBtn, el.clearUploadsBtn].forEach((btn) => {
+    if (btn) btn.disabled = !editing;
+  });
+  if (el.fileBtnLabel) el.fileBtnLabel.classList.toggle("is-disabled", !editing);
+  el.tracksContainer.classList.toggle("view-only", !editing);
+  document.querySelectorAll(".track-volume-fader, .track-toggle-btn").forEach((elm) => {
+    elm.disabled = !editing;
+  });
+}
+
+function renderCollabBar() {
+  const role = myRole();
+  el.myRoleBadge.textContent = `${collab.name}（${ROLE_LABEL[role]}）`;
+  el.myRoleBadge.className = `role-badge role-${role}`;
+
+  const editorUser = collab.users.find((u) => u.token === collab.editorToken);
+  if (editorUser) {
+    el.editorInfo.textContent = `✏️ 編集中: ${editorUser.name}${
+      editorUser.token === collab.token ? "（あなた）" : ""
+    }`;
+  } else {
+    el.editorInfo.textContent = "✏️ 編集者なし";
+  }
+
+  el.collabActions.innerHTML = "";
+
+  if (role === "viewer") {
+    const alreadyRequested = collab.pending.some((p) => p.token === collab.token);
+    const btn = document.createElement("button");
+    btn.className = "btn small";
+    btn.textContent = alreadyRequested ? "リクエスト取消" : "✋ 編集権をリクエスト";
+    btn.addEventListener("click", () => {
+      if (alreadyRequested) {
+        collab.socket.emit("cancel_request", { token: collab.token });
+      } else {
+        collab.socket.emit("request_edit", { token: collab.token });
+      }
+    });
+    el.collabActions.appendChild(btn);
+  }
+
+  if (role === "host") {
+    if (collab.editorToken !== collab.token) {
+      const reclaimBtn = document.createElement("button");
+      reclaimBtn.className = "btn small";
+      reclaimBtn.textContent = "編集権を取り戻す";
+      reclaimBtn.addEventListener("click", () => {
+        collab.socket.emit("reclaim_edit", { token: collab.token });
+      });
+      el.collabActions.appendChild(reclaimBtn);
+    }
+
+    if (collab.pending.length > 0) {
+      const list = document.createElement("div");
+      list.className = "pending-list";
+      for (const p of collab.pending) {
+        const item = document.createElement("div");
+        item.className = "pending-item";
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = `${p.name} さんがリクエスト中`;
+        item.appendChild(nameSpan);
+
+        const approveBtn = document.createElement("button");
+        approveBtn.className = "btn tiny primary";
+        approveBtn.textContent = "承認";
+        approveBtn.addEventListener("click", () => {
+          collab.socket.emit("approve_edit", { token: p.token, byToken: collab.token });
+        });
+        item.appendChild(approveBtn);
+
+        const rejectBtn = document.createElement("button");
+        rejectBtn.className = "btn tiny";
+        rejectBtn.textContent = "却下";
+        rejectBtn.addEventListener("click", () => {
+          collab.socket.emit("reject_edit", { token: p.token, byToken: collab.token });
+        });
+        item.appendChild(rejectBtn);
+
+        list.appendChild(item);
+      }
+      el.collabActions.appendChild(list);
+    }
+  }
+}
+
+function connectSocket() {
+  collab.socket = io();
+
+  collab.socket.on("connect", () => {
+    collab.socket.emit("join", { token: collab.token, name: collab.name });
+  });
+
+  collab.socket.on("room_state", (data) => {
+    collab.hostToken = data.hostToken;
+    collab.editorToken = data.editorToken;
+    collab.users = data.users || [];
+    collab.pending = data.pending || [];
+    renderCollabBar();
+    updateEditPermissionUI();
+  });
+
+  collab.socket.on("project_state", (data) => {
+    applyRemoteProjectState(data);
+  });
+}
+
+el.joinBtn.addEventListener("click", doJoin);
+el.joinNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doJoin();
+});
+
+function doJoin() {
+  const name = el.joinNameInput.value.trim();
+  if (!name) {
+    el.joinNameInput.focus();
+    return;
+  }
+  collab.name = name;
+  el.joinModal.style.display = "none";
+  connectSocket();
 }
 
 // ---------- 音声再生エンジン(Web Audio API) ----------
@@ -81,12 +326,18 @@ function loadBuffer(fileId, url) {
 // ---------- アップロード ----------
 
 el.fileInput.addEventListener("change", async (e) => {
+  if (!isEditor()) {
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
+    e.target.value = "";
+    return;
+  }
   const files = Array.from(e.target.files || []);
   for (const file of files) {
     await uploadFile(file);
   }
   e.target.value = "";
   renderAll();
+  syncProject();
 });
 
 async function uploadFile(file) {
@@ -94,7 +345,11 @@ async function uploadFile(file) {
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "X-User-Token": collab.token },
+      body: fd,
+    });
     const data = await res.json();
     if (!res.ok) {
       setStatus(`エラー: ${data.error || "アップロードに失敗しました"}`, true);
@@ -114,7 +369,7 @@ async function uploadFile(file) {
       timelineStart: 0,
       trackId,
     };
-    state.tracks.push({ trackId, label: data.filename, clips: [clip] });
+    state.tracks.push({ trackId, label: data.filename, volume: 1, muted: false, solo: false, clips: [clip] });
     loadBuffer(clip.fileId, clip.url).catch(() => {}); // 再生に備えて先にデコードしておく
     setStatus(`追加しました: ${file.name}`);
   } catch (err) {
@@ -191,15 +446,21 @@ function renderAll() {
   for (const track of state.tracks) {
     const row = document.createElement("div");
     row.className = "track-row";
+    if (isEffectivelyMuted(track, state.tracks)) {
+      row.classList.add("track-row--silenced");
+    }
 
     const label = document.createElement("div");
     label.className = "track-label";
+
+    const labelTop = document.createElement("div");
+    labelTop.className = "track-label-top";
 
     const labelText = document.createElement("span");
     labelText.className = "track-label-text";
     labelText.textContent = track.label;
     labelText.title = track.label;
-    label.appendChild(labelText);
+    labelTop.appendChild(labelText);
 
     const trackDeleteBtn = document.createElement("button");
     trackDeleteBtn.className = "track-delete-btn";
@@ -209,7 +470,10 @@ function renderAll() {
       e.stopPropagation();
       deleteTrackFile(track);
     });
-    label.appendChild(trackDeleteBtn);
+    labelTop.appendChild(trackDeleteBtn);
+
+    label.appendChild(labelTop);
+    label.appendChild(buildTrackControlsEl(track));
 
     row.appendChild(label);
 
@@ -240,6 +504,76 @@ function renderAll() {
   attachScrub(handle, el.ruler); // つまみ(丸)からもスクラブできるようにする。座標計算はルーラー基準。
 
   el.tracksContainer.appendChild(playhead);
+}
+
+// トラックラベル内の操作行(ミュート/ソロボタン + 音量フェーダー)を組み立てる
+function buildTrackControlsEl(track) {
+  const wrap = document.createElement("div");
+  wrap.className = "track-volume";
+
+  const editing = isEditor();
+
+  const muteBtn = document.createElement("button");
+  muteBtn.className = "track-toggle-btn track-mute-btn" + (track.muted ? " active" : "");
+  muteBtn.textContent = "M";
+  muteBtn.title = "ミュート";
+  muteBtn.disabled = !editing;
+  muteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!isEditor()) return;
+    track.muted = !track.muted;
+    renderAll();
+    applyLiveMixToActiveNodes();
+    syncProject();
+  });
+  wrap.appendChild(muteBtn);
+
+  const soloBtn = document.createElement("button");
+  soloBtn.className = "track-toggle-btn track-solo-btn" + (track.solo ? " active" : "");
+  soloBtn.textContent = "S";
+  soloBtn.title = "ソロ(このトラックだけを聴く)";
+  soloBtn.disabled = !editing;
+  soloBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!isEditor()) return;
+    track.solo = !track.solo;
+    renderAll();
+    applyLiveMixToActiveNodes();
+    syncProject();
+  });
+  wrap.appendChild(soloBtn);
+
+  const fader = document.createElement("input");
+  fader.type = "range";
+  fader.className = "track-volume-fader";
+  fader.min = "0";
+  fader.max = "150";
+  fader.step = "1";
+  fader.value = String(Math.round((track.volume ?? 1) * 100));
+  fader.disabled = !editing;
+  fader.title = "トラックの音量";
+
+  const valueLabel = document.createElement("span");
+  valueLabel.className = "track-volume-value";
+  valueLabel.textContent = `${fader.value}%`;
+
+  // ドラッグ中はローカルに即反映(再生中ならリアルタイムにも反映)し、
+  // 指を離した(change)タイミングでサーバーへ同期する
+  fader.addEventListener("input", () => {
+    if (!isEditor()) return;
+    const vol = Number(fader.value) / 100;
+    track.volume = vol;
+    valueLabel.textContent = `${fader.value}%`;
+    applyLiveMixToActiveNodes();
+  });
+  fader.addEventListener("change", () => {
+    if (!isEditor()) return;
+    syncProject();
+  });
+
+  wrap.appendChild(fader);
+  wrap.appendChild(valueLabel);
+  return wrap;
 }
 
 function buildClipEl(clip) {
@@ -325,6 +659,7 @@ function bestSnapDelta(target, edgeCandidates) {
 function attachDrag(clipEl, clip) {
   clipEl.addEventListener("mousedown", (e) => {
     if (e.target.classList.contains("handle")) return;
+    if (!isEditor()) return; // 閲覧者はクリップを動かせない
     e.preventDefault();
     e.stopPropagation();
     state.selectedClipId = clip.clipId;
@@ -354,6 +689,7 @@ function attachDrag(clipEl, clip) {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       renderAll();
+      syncProject();
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -364,6 +700,7 @@ function attachDrag(clipEl, clip) {
 
 function attachResize(handleEl, clip, side) {
   handleEl.addEventListener("mousedown", (e) => {
+    if (!isEditor()) return; // 閲覧者はトリミングできない
     e.preventDefault();
     e.stopPropagation();
     state.selectedClipId = clip.clipId;
@@ -416,6 +753,7 @@ function attachResize(handleEl, clip, side) {
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      syncProject();
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -425,6 +763,10 @@ function attachResize(handleEl, clip, side) {
 // ---------- カット / 削除 ----------
 
 el.cutBtn.addEventListener("click", () => {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
   if (!state.selectedClipId) {
     setStatus("カットするクリップを選択してください", true);
     return;
@@ -457,9 +799,14 @@ el.cutBtn.addEventListener("click", () => {
 
   setStatus("カットしました。2つのクリップに分割されました。");
   renderAll();
+  syncProject();
 });
 
 el.deleteBtn.addEventListener("click", () => {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
   if (!state.selectedClipId) {
     setStatus("削除するクリップを選択してください", true);
     return;
@@ -473,10 +820,15 @@ el.deleteBtn.addEventListener("click", () => {
   }
   state.selectedClipId = null;
   renderAll();
+  syncProject();
 });
 
 // トラック1つ分の音源ファイルをサーバーから削除し、タイムラインからも取り除く
 async function deleteTrackFile(track) {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
   const fileId = track.clips[0]?.fileId;
 
   if (fileId) {
@@ -485,7 +837,10 @@ async function deleteTrackFile(track) {
     }
     setStatus(`削除中: ${track.label} ...`);
     try {
-      const res = await fetch(`/api/uploads/${fileId}`, { method: "DELETE" });
+      const res = await fetch(`/api/uploads/${fileId}`, {
+        method: "DELETE",
+        headers: { "X-User-Token": collab.token },
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setStatus(`エラー: ${data.error || "削除に失敗しました"}`, true);
@@ -505,16 +860,24 @@ async function deleteTrackFile(track) {
 
   setStatus(`削除しました: ${track.label}`);
   renderAll();
+  syncProject();
 }
 
 // サーバーに保存されている音源ファイルを(前回セッション分も含めて)まとめて削除する
 el.clearUploadsBtn.addEventListener("click", async () => {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
   if (!confirm("サーバーに保存されている音源ファイルを全て削除します。よろしいですか?\n(現在編集中のタイムラインも空になります)")) {
     return;
   }
   setStatus("音源を全削除中...");
   try {
-    const res = await fetch("/api/uploads", { method: "DELETE" });
+    const res = await fetch("/api/uploads", {
+      method: "DELETE",
+      headers: { "X-User-Token": collab.token },
+    });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setStatus(`エラー: ${data.error || "削除に失敗しました"}`, true);
@@ -526,6 +889,7 @@ el.clearUploadsBtn.addEventListener("click", async () => {
     state.bufferCache = {};
     setStatus(`削除しました(${data.deleted ?? 0}件)`);
     renderAll();
+    syncProject();
   } catch (err) {
     setStatus(`通信エラー: ${err}`, true);
   }
@@ -595,6 +959,14 @@ function stopPlayback() {
     }
   });
   state.activeSources = [];
+  Object.values(state.activeGainNodes).forEach((gainNode) => {
+    try {
+      gainNode.disconnect();
+    } catch (e) {
+      // 既に切断済みの場合は無視してよい
+    }
+  });
+  state.activeGainNodes = {};
   if (state.rafId) cancelAnimationFrame(state.rafId);
   state.rafId = null;
 }
@@ -613,7 +985,7 @@ el.playBtn.addEventListener("click", async () => {
       const clipStartT = clip.timelineStart;
       const clipEndT = clip.timelineStart + dur;
       if (clipEndT <= startPlayhead) continue; // 既に終わっている
-      targets.push({ clip, clipStartT, clipEndT });
+      targets.push({ clip, track, clipStartT, clipEndT });
     }
   }
 
@@ -642,10 +1014,20 @@ el.playBtn.addEventListener("click", async () => {
   state.playStartCtxTime = baseWhen;
   state._playStartSec = startPlayhead;
 
-  targets.forEach(({ clip, clipStartT, clipEndT }, i) => {
+  targets.forEach(({ clip, track, clipStartT, clipEndT }, i) => {
     const source = ctx.createBufferSource();
     source.buffer = buffers[i];
-    source.connect(ctx.destination);
+
+    // トラックごとにGainNodeを1つ共有し、フェーダーの値を音量として反映する。
+    // 同じトラックの複数クリップ(カットで分かれた断片など)は同じGainNodeにつなぐ。
+    let gainNode = state.activeGainNodes[track.trackId];
+    if (!gainNode) {
+      gainNode = ctx.createGain();
+      gainNode.gain.value = isEffectivelyMuted(track, state.tracks) ? 0 : track.volume ?? 1;
+      gainNode.connect(ctx.destination);
+      state.activeGainNodes[track.trackId] = gainNode;
+    }
+    source.connect(gainNode);
 
     const offsetIntoClip = clip.trimStart + Math.max(0, startPlayhead - clipStartT);
     const startDelay = Math.max(0, clipStartT - startPlayhead);
@@ -686,6 +1068,7 @@ el.stopBtn.addEventListener("click", () => {
 el.exportBtn.addEventListener("click", async () => {
   const clips = [];
   for (const track of state.tracks) {
+    const effectiveVolume = isEffectivelyMuted(track, state.tracks) ? 0 : track.volume ?? 1;
     for (const clip of track.clips) {
       clips.push({
         fileId: clip.fileId,
@@ -693,6 +1076,7 @@ el.exportBtn.addEventListener("click", async () => {
         trimStart: clip.trimStart,
         trimEnd: clip.trimEnd,
         timelineStart: clip.timelineStart,
+        volume: effectiveVolume,
       });
     }
   }

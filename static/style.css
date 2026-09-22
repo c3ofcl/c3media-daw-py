@@ -105,6 +105,151 @@ body {
 
 .spacer { flex: 1; }
 
+.btn:disabled,
+.file-btn.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ================= 共同編集(オンライン編集) ================= */
+
+.collab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 16px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.collab-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.role-badge {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.role-badge.role-host { border-color: var(--accent-2); color: var(--accent-2); }
+.role-badge.role-editor { border-color: var(--accent); color: var(--accent); }
+.role-badge.role-viewer { border-color: var(--border); color: var(--text-dim); }
+
+.editor-info {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collab-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn.small {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.btn.tiny {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.pending-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pending-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px 3px 10px;
+}
+.pending-item span {
+  white-space: nowrap;
+}
+
+/* 閲覧者(編集権なし)のときの見た目: クリップは操作できない印象を与える */
+.tracks-container.view-only .clip {
+  cursor: default;
+}
+.tracks-container.view-only .clip .handle {
+  pointer-events: none;
+}
+
+/* 参加モーダル */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px 28px 24px;
+  width: min(360px, calc(100vw - 40px));
+  box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.7);
+}
+.modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.modal p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.modal input[type="text"] {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+.modal input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal .btn {
+  width: 100%;
+  padding: 9px 12px;
+}
+
 .status {
   min-height: 20px;
   padding: 4px 16px;
@@ -201,16 +346,23 @@ body {
 .track-label {
   width: 150px;
   flex-shrink: 0;
-  padding: 8px 10px;
+  padding: 6px 10px;
   font-size: 12px;
   color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.track-label-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
 }
 
 .track-label-text {
@@ -235,6 +387,72 @@ body {
   color: #ff6b6b;
   border-color: #ff6b6b;
   background: rgba(255, 107, 107, 0.1);
+}
+
+/* トラックごとの音量フェーダー・ミュート/ソロボタン */
+.track-volume {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.track-toggle-btn {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  line-height: 1;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.track-toggle-btn:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+.track-toggle-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.track-mute-btn.active {
+  background: #ff6b6b;
+  border-color: #ff6b6b;
+  color: #1b1d23;
+}
+.track-solo-btn.active {
+  background: #ffd166;
+  border-color: #ffd166;
+  color: #1b1d23;
+}
+
+.track-volume-fader {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.track-volume-fader:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.track-volume-value {
+  flex-shrink: 0;
+  width: 30px;
+  text-align: right;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* ソロ中の他トラック、またはミュート中のトラック(=実際には鳴らない)は
+   クリップを薄く表示して一目で分かるようにする。ラベル側の操作性は保つ。 */
+.track-row--silenced .track-lane {
+  opacity: 0.35;
 }
 
 .track-lane {

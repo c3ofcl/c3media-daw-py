@@ -31,6 +31,14 @@
     </div>
   </header>
 
+  <div class="collab-bar" id="collabBar">
+    <div class="collab-info">
+      <span id="myRoleBadge" class="role-badge"></span>
+      <span id="editorInfo" class="editor-info"></span>
+    </div>
+    <div class="collab-actions" id="collabActions"></div>
+  </div>
+
   <main class="editor">
     <div class="workspace" id="workspace">
       <div id="status" class="status"></div>
@@ -51,6 +59,17 @@
 
   <audio id="hiddenAudio" hidden></audio>
 
+  <!-- 共同編集(オンライン編集)への参加モーダル。名前を入力するまで操作できない -->
+  <div class="modal-overlay" id="joinModal">
+    <div class="modal">
+      <h2>🎚️ 共同編集に参加</h2>
+      <p>表示する名前を入力してください。最初に参加した人がホストになります。</p>
+      <input type="text" id="joinNameInput" maxlength="20" placeholder="例: たろう" autocomplete="off">
+      <button id="joinBtn" class="btn primary">参加する</button>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
   <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
