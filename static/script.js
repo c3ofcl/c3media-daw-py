@@ -13,6 +13,10 @@ const state = {
   bufferCache: {},     // fileId -> Promise<AudioBuffer> (デコード済み音声データ、クリップ間で共有)
   activeSources: [],   // 再生中のAudioBufferSourceNode一覧
   activeGainNodes: {}, // trackId -> GainNode (再生中のトラック音量を反映するためのノード)
+  activeAnalysers: {}, // trackId -> AnalyserNode (dBメーター表示用。信号経路には影響しない)
+  masterAnalyser: null,   // 全トラック合算のdBメーター用AnalyserNode
+  meterFillEls: {},       // trackId -> メーターの塗りつぶし要素(DOM参照キャッシュ)
+  meterDisplayDb: {},     // trackId | "master" -> 表示用に減衰させた現在のdB値
   rafId: null,
   playStartCtxTime: 0, // 再生開始時のAudioContext.currentTime
   _playStartSec: 0,    // 再生開始時点のタイムライン上の秒数
@@ -30,6 +34,7 @@ const el = {
   status: document.getElementById("status"),
   playBtn: document.getElementById("playBtn"),
   stopBtn: document.getElementById("stopBtn"),
+  masterMeterFill: document.getElementById("masterMeterFill"),
   cutBtn: document.getElementById("cutBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   clearUploadsBtn: document.getElementById("clearUploadsBtn"),
@@ -43,6 +48,11 @@ const el = {
   myRoleBadge: document.getElementById("myRoleBadge"),
   editorInfo: document.getElementById("editorInfo"),
   collabActions: document.getElementById("collabActions"),
+  participantsWrap: document.getElementById("participantsWrap"),
+  participantsBtn: document.getElementById("participantsBtn"),
+  participantsPanel: document.getElementById("participantsPanel"),
+  participantsList: document.getElementById("participantsList"),
+  participantsCount: document.getElementById("participantsCount"),
 };
 
 function setStatus(msg, isError = false) {
@@ -181,10 +191,116 @@ function updateEditPermissionUI() {
   });
 }
 
+// 指定トークンの人が現在host/editor/viewerのどれかを判定する(自分以外の参加者表示にも使う)
+function roleForToken(token) {
+  if (token === collab.hostToken) return "host";
+  if (token === collab.editorToken) return "editor";
+  return "viewer";
+}
+
+// 参加者一覧パネルの中身を最新の状態に更新する(開閉状態はここでは変えない)
+function renderParticipantsList() {
+  el.participantsCount.textContent = String(collab.users.length);
+  el.participantsList.innerHTML = "";
+  const iAmHost = isHost();
+
+  for (const u of collab.users) {
+    const li = document.createElement("li");
+    li.className = "participants-item";
+
+    const row = document.createElement("div");
+    row.className = "participants-row";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "participants-name";
+    nameSpan.textContent = u.name + (u.token === collab.token ? "（あなた）" : "");
+    row.appendChild(nameSpan);
+
+    const roleOfUser = roleForToken(u.token);
+    const isPending = collab.pending.some((p) => p.token === u.token);
+
+    const roleBadge = document.createElement("span");
+    roleBadge.className = `role-badge role-${roleOfUser} participants-role-badge`;
+    roleBadge.textContent = isPending ? "リクエスト中" : ROLE_LABEL[roleOfUser];
+    if (isPending) roleBadge.classList.add("role-pending");
+    row.appendChild(roleBadge);
+
+    li.appendChild(row);
+
+    // 権限操作(付与/剥奪/承認/却下)は、自分自身を除き、ホストだけに表示する
+    if (iAmHost && u.token !== collab.token) {
+      const actions = document.createElement("div");
+      actions.className = "participants-actions";
+
+      if (roleOfUser === "editor") {
+        const revokeBtn = document.createElement("button");
+        revokeBtn.className = "btn tiny";
+        revokeBtn.textContent = "編集権を外す";
+        revokeBtn.addEventListener("click", () => {
+          collab.socket.emit("reclaim_edit", { token: collab.token });
+        });
+        actions.appendChild(revokeBtn);
+      } else if (isPending) {
+        const approveBtn = document.createElement("button");
+        approveBtn.className = "btn tiny primary";
+        approveBtn.textContent = "承認";
+        approveBtn.addEventListener("click", () => {
+          collab.socket.emit("approve_edit", { token: u.token, byToken: collab.token });
+        });
+        actions.appendChild(approveBtn);
+
+        const rejectBtn = document.createElement("button");
+        rejectBtn.className = "btn tiny";
+        rejectBtn.textContent = "却下";
+        rejectBtn.addEventListener("click", () => {
+          collab.socket.emit("reject_edit", { token: u.token, byToken: collab.token });
+        });
+        actions.appendChild(rejectBtn);
+      } else {
+        const grantBtn = document.createElement("button");
+        grantBtn.className = "btn tiny";
+        grantBtn.textContent = "編集権を付与";
+        grantBtn.addEventListener("click", () => {
+          // リクエストの有無に関わらず、ホストは直接誰にでも編集権を渡せる
+          collab.socket.emit("approve_edit", { token: u.token, byToken: collab.token });
+        });
+        actions.appendChild(grantBtn);
+      }
+
+      li.appendChild(actions);
+    }
+
+    el.participantsList.appendChild(li);
+  }
+  if (collab.users.length === 0) {
+    const li = document.createElement("li");
+    li.className = "participants-empty";
+    li.textContent = "誰も参加していません";
+    el.participantsList.appendChild(li);
+  }
+}
+
+function toggleParticipantsPanel(forceOpen) {
+  const willOpen = forceOpen ?? el.participantsPanel.hidden;
+  el.participantsPanel.hidden = !willOpen;
+}
+
+el.participantsBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleParticipantsPanel();
+});
+// パネルの外側をクリックしたら閉じる
+document.addEventListener("click", (e) => {
+  if (!el.participantsPanel.hidden && !el.participantsWrap.contains(e.target)) {
+    toggleParticipantsPanel(false);
+  }
+});
+
 function renderCollabBar() {
   const role = myRole();
   el.myRoleBadge.textContent = `${collab.name}（${ROLE_LABEL[role]}）`;
   el.myRoleBadge.className = `role-badge role-${role}`;
+  renderParticipantsList();
 
   const editorUser = collab.users.find((u) => u.token === collab.editorToken);
   if (editorUser) {
@@ -211,50 +327,7 @@ function renderCollabBar() {
     });
     el.collabActions.appendChild(btn);
   }
-
-  if (role === "host") {
-    if (collab.editorToken !== collab.token) {
-      const reclaimBtn = document.createElement("button");
-      reclaimBtn.className = "btn small";
-      reclaimBtn.textContent = "編集権を取り戻す";
-      reclaimBtn.addEventListener("click", () => {
-        collab.socket.emit("reclaim_edit", { token: collab.token });
-      });
-      el.collabActions.appendChild(reclaimBtn);
-    }
-
-    if (collab.pending.length > 0) {
-      const list = document.createElement("div");
-      list.className = "pending-list";
-      for (const p of collab.pending) {
-        const item = document.createElement("div");
-        item.className = "pending-item";
-
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = `${p.name} さんがリクエスト中`;
-        item.appendChild(nameSpan);
-
-        const approveBtn = document.createElement("button");
-        approveBtn.className = "btn tiny primary";
-        approveBtn.textContent = "承認";
-        approveBtn.addEventListener("click", () => {
-          collab.socket.emit("approve_edit", { token: p.token, byToken: collab.token });
-        });
-        item.appendChild(approveBtn);
-
-        const rejectBtn = document.createElement("button");
-        rejectBtn.className = "btn tiny";
-        rejectBtn.textContent = "却下";
-        rejectBtn.addEventListener("click", () => {
-          collab.socket.emit("reject_edit", { token: p.token, byToken: collab.token });
-        });
-        item.appendChild(rejectBtn);
-
-        list.appendChild(item);
-      }
-      el.collabActions.appendChild(list);
-    }
-  }
+  // ホストによる承認/却下/編集権の付与・剥奪は「👥 参加者」一覧の各行から行う(そちらに統合)
 }
 
 function connectSocket() {
@@ -310,6 +383,62 @@ function getAudioContext() {
     audioContext.resume();
   }
   return audioContext;
+}
+
+// ---------- dBメーター ----------
+// AnalyserNodeは信号経路(GainNode→destination)には影響を与えず、並行して
+// タップ(接続)しておくだけで波形データを覗き見できる。ここではその波形の
+// ピーク値をdBに変換し、見やすいように「立ち上がりは一瞬、下降はゆっくり」
+// という典型的なピークメーターの動きに整えてから画面に反映する。
+const METER_MIN_DB = -60;
+const METER_DECAY_PER_FRAME = 0.6; // dB/フレーム。下降時のみこの速さで滑らかに減衰させる
+let meterScratch = new Float32Array(512);
+
+function analyserPeakDb(analyser) {
+  if (meterScratch.length !== analyser.fftSize) {
+    meterScratch = new Float32Array(analyser.fftSize);
+  }
+  analyser.getFloatTimeDomainData(meterScratch);
+  let peak = 0;
+  for (let i = 0; i < meterScratch.length; i++) {
+    const v = Math.abs(meterScratch[i]);
+    if (v > peak) peak = v;
+  }
+  if (peak < 1e-5) return METER_MIN_DB;
+  return Math.max(METER_MIN_DB, 20 * Math.log10(peak));
+}
+
+// 立ち上がりは即座に、下降はゆっくり追従させることで、数値がチラつかず読み取りやすくする
+function smoothedDb(key, rawDb) {
+  const prev = state.meterDisplayDb[key] ?? METER_MIN_DB;
+  const next = rawDb > prev ? rawDb : Math.max(rawDb, prev - METER_DECAY_PER_FRAME);
+  state.meterDisplayDb[key] = next;
+  return next;
+}
+
+function applyMeterFill(fillEl, db) {
+  if (!fillEl) return;
+  const level = Math.min(1, Math.max(0, (db - METER_MIN_DB) / (0 - METER_MIN_DB)));
+  fillEl.style.transform = `scaleX(${1 - level})`;
+}
+
+function updateMeters() {
+  for (const track of state.tracks) {
+    const analyser = state.activeAnalysers[track.trackId];
+    const fillEl = state.meterFillEls[track.trackId];
+    if (!analyser || !fillEl) continue;
+    applyMeterFill(fillEl, smoothedDb(track.trackId, analyserPeakDb(analyser)));
+  }
+  if (state.masterAnalyser) {
+    applyMeterFill(el.masterMeterFill, smoothedDb("master", analyserPeakDb(state.masterAnalyser)));
+  }
+}
+
+// 再生停止時、メーターを静止状態(表示なし)に戻す
+function resetMeters() {
+  state.meterDisplayDb = {};
+  Object.values(state.meterFillEls).forEach((fillEl) => applyMeterFill(fillEl, METER_MIN_DB));
+  applyMeterFill(el.masterMeterFill, METER_MIN_DB);
 }
 
 // 同じ音声ファイルはクリップ(カット後の断片含む)間でデコード結果を共有し、
@@ -439,6 +568,7 @@ function renderAll() {
 
   // 既存の track-row / grid-line / playhead を削除して再構築
   el.tracksContainer.querySelectorAll(".track-row, .grid-line, .playhead").forEach((n) => n.remove());
+  state.meterFillEls = {}; // トラック削除で消えた要素の古い参照が残らないようにする
 
   const total = timelineTotalDuration();
   renderGridLines(total);
@@ -474,6 +604,7 @@ function renderAll() {
 
     label.appendChild(labelTop);
     label.appendChild(buildTrackControlsEl(track));
+    label.appendChild(buildTrackMeterEl(track));
 
     row.appendChild(label);
 
@@ -574,6 +705,18 @@ function buildTrackControlsEl(track) {
   wrap.appendChild(fader);
   wrap.appendChild(valueLabel);
   return wrap;
+}
+
+// トラックの音量メーター(細い横バー)を組み立てる。再生中のみ動き、
+// 停止中は静止(空)のまま。DOM参照はstate.meterFillElsにキャッシュしておく。
+function buildTrackMeterEl(track) {
+  const meter = document.createElement("div");
+  meter.className = "track-meter";
+  const fill = document.createElement("div");
+  fill.className = "track-meter-fill";
+  meter.appendChild(fill);
+  state.meterFillEls[track.trackId] = fill;
+  return meter;
 }
 
 function buildClipEl(clip) {
@@ -967,8 +1110,17 @@ function stopPlayback() {
     }
   });
   state.activeGainNodes = {};
+  Object.values(state.activeAnalysers).forEach((analyser) => {
+    try {
+      analyser.disconnect();
+    } catch (e) {
+      // 既に切断済みの場合は無視してよい
+    }
+  });
+  state.activeAnalysers = {};
   if (state.rafId) cancelAnimationFrame(state.rafId);
   state.rafId = null;
+  resetMeters();
 }
 
 el.playBtn.addEventListener("click", async () => {
@@ -1014,6 +1166,12 @@ el.playBtn.addEventListener("click", async () => {
   state.playStartCtxTime = baseWhen;
   state._playStartSec = startPlayhead;
 
+  // マスターメーター用のAnalyserNode(全トラックのGainNodeをここにも並行してつなぐ)
+  if (!state.masterAnalyser) {
+    state.masterAnalyser = ctx.createAnalyser();
+    state.masterAnalyser.fftSize = 512;
+  }
+
   targets.forEach(({ clip, track, clipStartT, clipEndT }, i) => {
     const source = ctx.createBufferSource();
     source.buffer = buffers[i];
@@ -1025,7 +1183,14 @@ el.playBtn.addEventListener("click", async () => {
       gainNode = ctx.createGain();
       gainNode.gain.value = isEffectivelyMuted(track, state.tracks) ? 0 : track.volume ?? 1;
       gainNode.connect(ctx.destination);
+      gainNode.connect(state.masterAnalyser); // マスターメーターへ並行してタップ
       state.activeGainNodes[track.trackId] = gainNode;
+
+      // トラック個別のdBメーター用AnalyserNode。出力先には接続せず、値を読み取るだけに使う。
+      const trackAnalyser = ctx.createAnalyser();
+      trackAnalyser.fftSize = 512;
+      gainNode.connect(trackAnalyser);
+      state.activeAnalysers[track.trackId] = trackAnalyser;
     }
     source.connect(gainNode);
 
@@ -1050,6 +1215,7 @@ function tickPlayhead() {
     playheadEl.style.left = `${LABEL_WIDTH + nowSec * PX_PER_SEC}px`;
   }
   updateTimeDisplay(nowSec);
+  updateMeters();
   state.rafId = requestAnimationFrame(tickPlayhead);
 }
 

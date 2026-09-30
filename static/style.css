@@ -7,7 +7,7 @@
   --text-dim: #9aa0ad;
   --accent: #5b8cff;
   --accent-2: #ff8a5b;
-  --track-h: 64px;
+  --track-h: 72px;
   --px-per-sec: 60px;
 }
 
@@ -155,6 +155,90 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 参加者一覧ボタン + ドロップダウンパネル */
+.participants-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.participants-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  min-width: 230px;
+  max-width: 320px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  padding: 10px;
+}
+
+.participants-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.participants-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.participants-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 2px;
+  font-size: 12px;
+}
+
+.participants-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.participants-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.participants-role-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 7px;
+}
+.participants-role-badge.role-pending {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+
+.participants-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.participants-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 6px 2px;
+}
+
 .collab-actions {
   display: flex;
   align-items: center;
@@ -169,26 +253,6 @@ body {
 .btn.tiny {
   padding: 3px 8px;
   font-size: 11px;
-}
-
-.pending-list {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.pending-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 6px 3px 10px;
-}
-.pending-item span {
-  white-space: nowrap;
 }
 
 /* 閲覧者(編集権なし)のときの見た目: クリップは操作できない印象を与える */
@@ -447,6 +511,82 @@ body {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/* トラックごとのdBメーター(細い横バー)。緑→黄→赤のグラデーションを
+   固定で敷いておき、fill(黒っぽい背景色)をレベルに応じて右から覆う仕組み。
+   幅が狭いため数字は付けず、マスター側と同じ0/-12/-24/-36/-48/-60dBの位置に
+   目盛り線(縦の細線)だけを重ねて、マスター側のスケールと感覚を揃えている。 */
+.track-meter {
+  height: 5px;
+  border-radius: 2px;
+  overflow: hidden;
+  background-image: linear-gradient(
+      to right,
+      transparent 0%, transparent 19.3%, var(--bg) 19.3%, var(--bg) 20.7%, transparent 20.7%,
+      transparent 39.3%, var(--bg) 39.3%, var(--bg) 40.7%, transparent 40.7%,
+      transparent 59.3%, var(--bg) 59.3%, var(--bg) 60.7%, transparent 60.7%,
+      transparent 79.3%, var(--bg) 79.3%, var(--bg) 80.7%, transparent 80.7%, transparent 100%
+    ),
+    linear-gradient(to right, #3ddc84 0%, #3ddc84 60%, #ffd166 82%, #ff6b6b 100%);
+}
+.track-meter-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--panel-2);
+  transform-origin: right center;
+  transform: scaleX(1); /* scaleX(1 - level) で右から覆っていく */
+}
+
+/* マスター出力メーター(ツールバー内)。バーの下に固定の目盛り(0〜-60dB)を並べ、
+   値がその都度変わる数字表示は置かない(バー位置と目盛りだけで読み取れるようにする)。 */
+.master-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.master-meter-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.master-meter-scale-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.master-meter-bar {
+  width: 150px;
+  height: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: linear-gradient(to right, #3ddc84 0%, #3ddc84 60%, #ffd166 82%, #ff6b6b 100%);
+}
+.master-meter-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--panel-2);
+  transform-origin: right center;
+  transform: scaleX(1);
+}
+.master-meter-scale {
+  position: relative;
+  height: 9px;
+  width: 150px;
+}
+.master-meter-scale span {
+  position: absolute;
+  top: 0;
+  font-size: 8px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 /* ソロ中の他トラック、またはミュート中のトラック(=実際には鳴らない)は

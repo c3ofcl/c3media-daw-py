@@ -19,6 +19,20 @@
       </label>
       <button id="playBtn" class="btn">▶ 再生</button>
       <button id="stopBtn" class="btn">■ 停止</button>
+      <div class="master-meter" id="masterMeter" title="マスター出力レベル(0 / -12 / -24 / -36 / -48 / -60dB)">
+        <span class="master-meter-label">MASTER</span>
+        <div class="master-meter-scale-wrap">
+          <div class="master-meter-bar"><div class="master-meter-fill" id="masterMeterFill"></div></div>
+          <div class="master-meter-scale">
+            <span style="left:100%; transform:translateX(-100%);">0</span>
+            <span style="left:80%; transform:translateX(-50%);">-12</span>
+            <span style="left:60%; transform:translateX(-50%);">-24</span>
+            <span style="left:40%; transform:translateX(-50%);">-36</span>
+            <span style="left:20%; transform:translateX(-50%);">-48</span>
+            <span style="left:0%;">-60</span>
+          </div>
+        </div>
+      </div>
       <button id="cutBtn" class="btn" title="選択中のクリップを再生位置でカット">✂ カット</button>
       <button id="deleteBtn" class="btn" title="選択中のクリップを削除">🗑 削除</button>
       <button id="clearUploadsBtn" class="btn" title="サーバーに保存されている音源ファイルを全て削除します">🧹 音源を全削除</button>
@@ -35,6 +49,15 @@
     <div class="collab-info">
       <span id="myRoleBadge" class="role-badge"></span>
       <span id="editorInfo" class="editor-info"></span>
+      <div class="participants-wrap" id="participantsWrap">
+        <button id="participantsBtn" class="btn small" type="button">
+          👥 参加者 <span id="participantsCount">0</span>
+        </button>
+        <div class="participants-panel" id="participantsPanel" hidden>
+          <div class="participants-panel-title">参加者一覧</div>
+          <ul class="participants-list" id="participantsList"></ul>
+        </div>
+      </div>
     </div>
     <div class="collab-actions" id="collabActions"></div>
   </div>
