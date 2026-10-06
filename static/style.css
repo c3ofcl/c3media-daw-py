@@ -13,6 +13,12 @@
 
 * { box-sizing: border-box; }
 
+/* 安全策: 他のルールで display を個別指定している要素でも、
+   hidden属性が付いていれば必ず非表示になるようにする
+   (例: .add-track-menu は display:flex を持つため、これが無いと
+   hidden状態でも表示されたままになってしまう)。 */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
 }
@@ -87,12 +93,113 @@ body {
 .file-btn {
   background: var(--panel-2);
   border: 1px solid var(--border);
+  color: var(--text);
   padding: 7px 12px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
 }
 .file-btn:hover { border-color: var(--accent); }
+
+/* 「+ ファイルを追加」ドロップダウン(ファイルから追加 / デモ音源を追加) */
+.add-track-wrap {
+  position: relative;
+}
+
+.add-track-menu,
+.demo-tracks-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  /* 画面の右端で見切れないよう、ビューポート幅に応じて上限を設ける */
+  max-width: calc(100vw - 24px);
+}
+
+.add-track-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  min-width: 190px;
+}
+
+.add-track-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.add-track-menu-item:hover {
+  background: var(--panel-2);
+}
+
+.demo-tracks-panel {
+  padding: 10px;
+  min-width: 260px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+.demo-tracks-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.demo-tracks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.demo-tracks-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+
+.demo-tracks-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.demo-tracks-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.demo-tracks-duration {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-tracks-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 6px 2px;
+}
 
 .select {
   background: var(--panel-2);
@@ -167,7 +274,7 @@ body {
   left: 0;
   z-index: 50;
   min-width: 230px;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 24px));
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -302,7 +409,8 @@ body {
   color: var(--text);
   border-radius: 6px;
   padding: 9px 10px;
-  font-size: 14px;
+  /* 16px未満だとiOS Safariがフォーカス時に自動ズームしてしまうため16px以上にする */
+  font-size: 16px;
   margin-bottom: 14px;
 }
 .modal input[type="text"]:focus {
@@ -504,13 +612,54 @@ body {
   opacity: 0.5;
 }
 
+.track-volume-value-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 数値を直接タイプして音量を調整できる入力欄。普段はテキスト表示のように
+   見せたいので、枠線や背景は消してフォーカス時だけ分かるようにする。 */
 .track-volume-value {
   flex-shrink: 0;
-  width: 30px;
+  width: 26px;
   text-align: right;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 0;
+  font-family: inherit;
+  cursor: text;
+}
+.track-volume-value:hover:not(:disabled) {
+  border-bottom-color: var(--border);
+}
+.track-volume-value:focus {
+  outline: none;
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.track-volume-value:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+/* スピナー矢印は幅を圧迫するだけなので非表示にする */
+.track-volume-value::-webkit-inner-spin-button,
+.track-volume-value::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.track-volume-value {
+  -moz-appearance: textfield;
+}
+
+.track-volume-unit {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 1px;
 }
 
 /* トラックごとのdBメーター(細い横バー)。緑→黄→赤のグラデーションを
@@ -536,6 +685,22 @@ body {
   background: var(--panel-2);
   transform-origin: right center;
   transform: scaleX(1); /* scaleX(1 - level) で右から覆っていく */
+}
+
+/* ズームコントロール(横=時間軸 / 縦=トラックの高さ)。個人の表示設定なので
+   他の人には影響しない旨がわかるよう、マスターメーターと似た枠付きの見た目にしている。 */
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.zoom-controls-label {
+  font-size: 11px;
+  margin-right: 2px;
 }
 
 /* マスター出力メーター(ツールバー内)。バーの下に固定の目盛り(0〜-60dB)を並べ、
@@ -593,6 +758,17 @@ body {
    クリップを薄く表示して一目で分かるようにする。ラベル側の操作性は保つ。 */
 .track-row--silenced .track-lane {
   opacity: 0.35;
+}
+
+/* 縦ズームでトラックの高さを大きく詰めたとき、ラベル内のM/Sボタンや
+   フェーダー・メーターは収まらなくなるため非表示にし、トラック名だけの
+   簡易表示にする(全体を見渡す用途なので、細かい操作UIは優先度が低い)。 */
+.tracks-container.compact-labels .track-label {
+  justify-content: center;
+}
+.tracks-container.compact-labels .track-volume,
+.tracks-container.compact-labels .track-meter {
+  display: none;
 }
 
 .track-lane {
@@ -695,4 +871,67 @@ body {
 .playhead-handle:hover::before {
   width: 14px;
   height: 14px;
+}
+
+/* ================= スマートフォン向けの調整 ================= */
+@media (max-width: 760px) {
+  /* ツールバーはボタン数が多く、折り返すと何行にもなって縦が圧迫されたり
+     ボタン同士が重なって見えたりするため、1行に固定して横スクロールにする。
+     (何があるかは左右にスワイプして確認する、スマホでよくある形式) */
+  .toolbar {
+    flex: 1 1 100%; /* 単独の行になったとき画面幅いっぱいまで広がるようにする(横スクロールを効かせるため) */
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px;
+    margin: 0 -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .toolbar > * {
+    flex-shrink: 0; /* 横スクロール内でボタンが潰れないように */
+  }
+  .spacer {
+    display: none; /* 右寄せ用の余白は横スクロール時は意味がないので消す */
+  }
+
+  .topbar {
+    gap: 10px;
+    padding: 10px 16px 0;
+  }
+  .topbar h1 {
+    font-size: 14px;
+  }
+
+  /* タップしやすいよう主要ボタンの当たり判定を少し広げる */
+  .btn,
+  .file-btn {
+    padding: 9px 13px;
+  }
+
+  /* トラックラベル列は幅を保ったまま(横の時間軸はもともとスクロールする設計のため)、
+     参加者一覧など上に開くパネルがボタンより大きくはみ出さないようにだけ調整する */
+  .collab-bar {
+    padding: 8px 16px;
+  }
+
+  .modal {
+    padding: 22px 20px 20px;
+  }
+
+  /* トラックが無い(空の)タイムラインにまで950px幅を強制すると、
+     案内メッセージが画面からはみ出してしまうため最小幅を外す。
+     実際のクリップは秒数に応じた幅で描画されるので、トラックを
+     追加した後は従来通り横スクロールするタイムラインになる。 */
+  .ruler {
+    min-width: 0;
+  }
+  .tracks-container {
+    min-width: 0;
+  }
+  .empty-hint {
+    font-size: 12px;
+    padding: 28px 16px;
+  }
 }

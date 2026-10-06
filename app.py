@@ -25,8 +25,12 @@
 
 import os
 import math
+import random
+import shutil
+import struct
 import threading
 import uuid
+import wave
 
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_socketio import SocketIO
@@ -35,8 +39,10 @@ from pydub import AudioSegment
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 EXPORT_DIR = os.path.join(BASE_DIR, "exports")
+DEMO_DIR = os.path.join(BASE_DIR, "demo")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
+os.makedirs(DEMO_DIR, exist_ok=True)
 
 ALLOWED_EXT = {"mp3", "wav", "ogg", "m4a", "flac", "aac", "wma"}
 MAX_CONTENT_LENGTH = 300 * 1024 * 1024  # 300MB
@@ -49,6 +55,163 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
+
+
+# ================= デモ音源 =================
+# 「とりあえず試しに使ってみたい」場合のために、著作権を気にせず使える短いデモ音源を
+# 用意しておく。外部の音声素材を使わず、サイン波やノイズからその場で合成するので、
+# インターネット接続やffmpeg無しでも(wave/struct/mathなど標準ライブラリのみで)生成できる。
+# 一度生成したファイルはdemo/ディレクトリに保存され、次回起動時は再利用される。
+
+SAMPLE_RATE = 44100
+
+
+def _write_wav(path, samples, sample_rate=SAMPLE_RATE):
+    """-1.0〜1.0のfloatサンプル列を16bit PCM モノラルWAVとして書き出す"""
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        clipped = (max(-1.0, min(1.0, s)) for s in samples)
+        frames = b"".join(struct.pack("<h", int(s * 32767)) for s in clipped)
+        wf.writeframes(frames)
+
+
+def _wav_duration_sec(path):
+    with wave.open(path, "r") as wf:
+        return wf.getnframes() / float(wf.getframerate())
+
+
+def _sine(freq, duration, sample_rate=SAMPLE_RATE, amp=0.5):
+    n = int(duration * sample_rate)
+    return [amp * math.sin(2 * math.pi * freq * i / sample_rate) for i in range(n)]
+
+
+def _silence(duration, sample_rate=SAMPLE_RATE):
+    return [0.0] * int(duration * sample_rate)
+
+
+def _envelope(samples, attack=0.01, release=0.05, sample_rate=SAMPLE_RATE):
+    """単純なフェードイン/フェードアウトをかけて、音の出始め/終わりのプチノイズを防ぐ"""
+    n = len(samples)
+    a = int(attack * sample_rate)
+    r = int(release * sample_rate)
+    out = list(samples)
+    for i in range(min(a, n)):
+        out[i] *= i / max(1, a)
+    for i in range(min(r, n)):
+        out[n - 1 - i] *= i / max(1, r)
+    return out
+
+
+def _mix(*tracks):
+    length = max((len(t) for t in tracks), default=0)
+    out = [0.0] * length
+    for t in tracks:
+        for i, v in enumerate(t):
+            out[i] += v
+    peak = max([abs(v) for v in out], default=1.0) or 1.0
+    if peak > 1.0:
+        out = [v / peak for v in out]
+    return out
+
+
+def _kick(sample_rate=SAMPLE_RATE):
+    """低音が急速に減衰するサイン波による簡易キックドラム"""
+    dur = 0.18
+    n = int(dur * sample_rate)
+    samples = []
+    for i in range(n):
+        t = i / sample_rate
+        freq = 150 * math.exp(-t * 18) + 40
+        amp = math.exp(-t * 14)
+        samples.append(0.9 * amp * math.sin(2 * math.pi * freq * t))
+    return samples
+
+
+def _hihat(sample_rate=SAMPLE_RATE):
+    """短いノイズバーストによる簡易ハイハット"""
+    dur = 0.05
+    n = int(dur * sample_rate)
+    samples = [0.5 * (random.random() * 2 - 1) for _ in range(n)]
+    return _envelope(samples, attack=0.001, release=dur * 0.8, sample_rate=sample_rate)
+
+
+def generate_demo_beat(path, bpm=100, bars=4):
+    """シンプルなキック+ハイハットのドラムパターンを合成する"""
+    step = (60.0 / bpm) / 2  # 8分音符刻み
+    total_steps = bars * 8
+    kick_pattern = ([1, 0, 0, 0, 1, 0, 0, 0] * bars)[:total_steps]
+    hat_pattern = [1] * total_steps
+    timeline = _silence(total_steps * step + 0.3)
+    for i in range(total_steps):
+        start = int(i * step * SAMPLE_RATE)
+        if kick_pattern[i]:
+            for j, v in enumerate(_kick()):
+                if start + j < len(timeline):
+                    timeline[start + j] += v
+        if hat_pattern[i]:
+            for j, v in enumerate(_hihat()):
+                if start + j < len(timeline):
+                    timeline[start + j] += v * 0.5
+    peak = max([abs(v) for v in timeline], default=1.0) or 1.0
+    timeline = [v / peak * 0.9 for v in timeline]
+    _write_wav(path, timeline)
+
+
+def generate_demo_bass(path, bpm=100):
+    """シンプルな4拍のベースライン(サイン波)"""
+    notes_hz = [55.00, 55.00, 65.41, 73.42, 55.00, 49.00, 55.00, 65.41]  # A1近辺
+    note_dur = 60.0 / bpm
+    samples = []
+    for freq in notes_hz:
+        s = _sine(freq, note_dur, amp=0.55)
+        samples.extend(_envelope(s, attack=0.01, release=note_dur * 0.3))
+    _write_wav(path, samples)
+
+
+def generate_demo_melody(path, bpm=100):
+    """Cメジャースケールを使った簡単なメロディ"""
+    scale_hz = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]
+    sequence = [0, 2, 4, 5, 7, 5, 4, 2, 0, 4, 7, 4, 2, 0]
+    beat_sec = 60.0 / bpm
+    note_dur = beat_sec * 0.85
+    gap = beat_sec * 0.15
+    samples = []
+    for idx in sequence:
+        s = _sine(scale_hz[idx], note_dur, amp=0.45)
+        samples.extend(_envelope(s, attack=0.01, release=note_dur * 0.3))
+        samples.extend(_silence(gap))
+    _write_wav(path, samples)
+
+
+def generate_demo_pad(path, duration=6.0):
+    """持続するコード(パッド)音。Cメジャートライアドを3つのサイン波で重ねる"""
+    chord_hz = [130.81, 164.81, 196.00]  # C3, E3, G3
+    tracks = [_sine(f, duration, amp=0.28) for f in chord_hz]
+    mixed = _mix(*tracks)
+    mixed = _envelope(mixed, attack=1.2, release=1.8)
+    _write_wav(path, mixed)
+
+
+DEMO_TRACK_DEFS = [
+    {"id": "demo_beat", "name": "デモ: ドラムビート", "filename": "demo_beat.wav", "generate": generate_demo_beat},
+    {"id": "demo_bass", "name": "デモ: ベースライン", "filename": "demo_bass.wav", "generate": generate_demo_bass},
+    {"id": "demo_melody", "name": "デモ: メロディ", "filename": "demo_melody.wav", "generate": generate_demo_melody},
+    {"id": "demo_pad", "name": "デモ: パッド(コード)", "filename": "demo_pad.wav", "generate": generate_demo_pad},
+]
+
+
+def ensure_demo_tracks():
+    """デモ音源のWAVファイルが無ければ合成して用意し、各トラックの長さを控えておく"""
+    for d in DEMO_TRACK_DEFS:
+        path = os.path.join(DEMO_DIR, d["filename"])
+        if not os.path.exists(path):
+            d["generate"](path)
+        d["duration"] = _wav_duration_sec(path)
+
+
+ensure_demo_tracks()
 
 
 # ================= 共同編集: ルーム状態 =================
@@ -144,6 +307,46 @@ def upload():
             "filename": f.filename,
             "url": f"/uploads/{saved_name}",
             "duration": duration,
+        }
+    )
+
+
+@app.route("/api/demo-tracks", methods=["GET"])
+def list_demo_tracks():
+    """利用可能なデモ音源の一覧(名前と長さ)を返す。誰でも閲覧できる(編集権は不要)。"""
+    return jsonify(
+        [{"id": d["id"], "name": d["name"], "duration": d["duration"]} for d in DEMO_TRACK_DEFS]
+    )
+
+
+@app.route("/api/demo-tracks/<demo_id>/add", methods=["POST"])
+def add_demo_track(demo_id):
+    """選んだデモ音源をuploads/へコピーし、通常のアップロードと同じ形式で返す。
+    (以降の扱い―削除・書き出し・共同編集での同期―を、ユーザーがアップロードした
+     ファイルと完全に同じコードパスに乗せるため)"""
+    if not is_current_editor(request.headers.get("X-User-Token")):
+        return jsonify({"error": "編集権がありません"}), 403
+
+    demo = next((d for d in DEMO_TRACK_DEFS if d["id"] == demo_id), None)
+    if demo is None:
+        return jsonify({"error": "指定されたデモ音源が見つかりません"}), 404
+
+    src_path = os.path.join(DEMO_DIR, demo["filename"])
+    if not os.path.exists(src_path):
+        return jsonify({"error": "デモ音源ファイルがサーバーに見つかりません"}), 404
+
+    file_id = uuid.uuid4().hex
+    saved_name = f"{file_id}.wav"
+    dst_path = os.path.join(UPLOAD_DIR, saved_name)
+    shutil.copyfile(src_path, dst_path)
+
+    return jsonify(
+        {
+            "id": file_id,
+            "ext": "wav",
+            "filename": demo["name"],
+            "url": f"/uploads/{saved_name}",
+            "duration": demo["duration"],
         }
     )
 

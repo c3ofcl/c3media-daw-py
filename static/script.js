@@ -1,9 +1,21 @@
 // ===== マルチトラック音声エディタ フロントエンド =====
 
-const PX_PER_SEC = 60; // style.css の --px-per-sec と揃える
+let PX_PER_SEC = 60; // 横方向(時間軸)のズーム。ズームボタンで自分の画面だけ変更できる
 const LABEL_WIDTH = 150;
 const GRID_SNAP_SEC = 1; // グリッドスナップの間隔(秒)。track-laneの背景の縦線(1秒間隔)と揃えている
 const SNAP_PX_THRESHOLD = 8; // スナップが効く距離(px)。PX_PER_SECで秒に換算して使う
+
+// ズームの範囲。広すぎたり狭すぎたりして操作不能にならないようクランプする
+const MIN_PX_PER_SEC = 8;
+const MAX_PX_PER_SEC = 400;
+const DEFAULT_PX_PER_SEC = 60;
+const MIN_TRACK_H = 40;
+const MAX_TRACK_H = 160;
+const DEFAULT_TRACK_H = 72;
+const COMPACT_TRACK_H_THRESHOLD = 50; // これ以下の高さでは、トラックラベル内をトラック名だけの簡易表示にする
+const ZOOM_STEP = 1.25;
+
+let trackH = DEFAULT_TRACK_H; // 縦方向(トラックの高さ)のズーム。--track-h と同期する
 
 const state = {
   tracks: [],       // [{trackId, label, clips: [clip, ...]}]
@@ -27,9 +39,17 @@ let trackCounter = 0;
 
 const el = {
   fileInput: document.getElementById("fileInput"),
-  fileBtnLabel: document.querySelector(".file-btn"),
+  fileBtnLabel: document.querySelector(".file-btn"), // 現在は<button id="addTrackBtn">
+  addTrackWrap: document.getElementById("addTrackWrap"),
+  addTrackBtn: document.getElementById("addTrackBtn"),
+  addTrackMenu: document.getElementById("addTrackMenu"),
+  addFromFileBtn: document.getElementById("addFromFileBtn"),
+  addFromDemoBtn: document.getElementById("addFromDemoBtn"),
+  demoTracksPanel: document.getElementById("demoTracksPanel"),
+  demoTracksList: document.getElementById("demoTracksList"),
   tracksContainer: document.getElementById("tracksContainer"),
   ruler: document.getElementById("ruler"),
+  workspaceBody: document.getElementById("workspaceBody"),
   emptyHint: document.getElementById("emptyHint"),
   status: document.getElementById("status"),
   playBtn: document.getElementById("playBtn"),
@@ -38,6 +58,11 @@ const el = {
   cutBtn: document.getElementById("cutBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   clearUploadsBtn: document.getElementById("clearUploadsBtn"),
+  zoomInH: document.getElementById("zoomInH"),
+  zoomOutH: document.getElementById("zoomOutH"),
+  zoomInV: document.getElementById("zoomInV"),
+  zoomOutV: document.getElementById("zoomOutV"),
+  zoomFitBtn: document.getElementById("zoomFitBtn"),
   exportBtn: document.getElementById("exportBtn"),
   formatSelect: document.getElementById("formatSelect"),
   currentTimeLabel: document.getElementById("currentTimeLabel"),
@@ -184,9 +209,16 @@ function updateEditPermissionUI() {
   [el.cutBtn, el.deleteBtn, el.clearUploadsBtn].forEach((btn) => {
     if (btn) btn.disabled = !editing;
   });
-  if (el.fileBtnLabel) el.fileBtnLabel.classList.toggle("is-disabled", !editing);
+  if (el.fileBtnLabel) {
+    el.fileBtnLabel.classList.toggle("is-disabled", !editing);
+    el.fileBtnLabel.disabled = !editing;
+  }
+  if (!editing) {
+    el.addTrackMenu.hidden = true;
+    el.demoTracksPanel.hidden = true;
+  }
   el.tracksContainer.classList.toggle("view-only", !editing);
-  document.querySelectorAll(".track-volume-fader, .track-toggle-btn").forEach((elm) => {
+  document.querySelectorAll(".track-volume-fader, .track-volume-value, .track-toggle-btn").forEach((elm) => {
     elm.disabled = !editing;
   });
 }
@@ -484,29 +516,166 @@ async function uploadFile(file) {
       setStatus(`エラー: ${data.error || "アップロードに失敗しました"}`, true);
       return;
     }
-    trackCounter += 1;
-    const trackId = `t${trackCounter}`;
-    const clip = {
-      clipId: `c${++clipCounter}`,
-      fileId: data.id,
-      ext: data.ext,
-      filename: data.filename,
-      url: data.url,
-      srcDuration: data.duration,
-      trimStart: 0,
-      trimEnd: data.duration,
-      timelineStart: 0,
-      trackId,
-    };
-    state.tracks.push({ trackId, label: data.filename, volume: 1, muted: false, solo: false, clips: [clip] });
-    loadBuffer(clip.fileId, clip.url).catch(() => {}); // 再生に備えて先にデコードしておく
+    addTrackFromResponseData(data);
     setStatus(`追加しました: ${file.name}`);
   } catch (err) {
     setStatus(`通信エラー: ${err}`, true);
   }
 }
 
+// /api/upload または /api/demo-tracks/<id>/add のレスポンス(同じ形式)から
+// 新しいトラック+クリップをタイムラインに追加する共通処理
+function addTrackFromResponseData(data) {
+  trackCounter += 1;
+  const trackId = `t${trackCounter}`;
+  const clip = {
+    clipId: `c${++clipCounter}`,
+    fileId: data.id,
+    ext: data.ext,
+    filename: data.filename,
+    url: data.url,
+    srcDuration: data.duration,
+    trimStart: 0,
+    trimEnd: data.duration,
+    timelineStart: 0,
+    trackId,
+  };
+  state.tracks.push({ trackId, label: data.filename, volume: 1, muted: false, solo: false, clips: [clip] });
+  loadBuffer(clip.fileId, clip.url).catch(() => {}); // 再生に備えて先にデコードしておく
+}
+
+// デモ音源(サーバーが合成した試用音源)を1つ選んでタイムラインに追加する
+async function addDemoTrack(demoId, demoName) {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  setStatus(`デモ音源を追加中: ${demoName} ...`);
+  try {
+    const res = await fetch(`/api/demo-tracks/${demoId}/add`, {
+      method: "POST",
+      headers: { "X-User-Token": collab.token },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(`エラー: ${data.error || "デモ音源の追加に失敗しました"}`, true);
+      return;
+    }
+    addTrackFromResponseData(data);
+    renderAll();
+    syncProject();
+    setStatus(`追加しました: ${demoName}`);
+  } catch (err) {
+    setStatus(`通信エラー: ${err}`, true);
+  }
+}
+
+// ---------- 「+ ファイルを追加」ドロップダウン(ファイル / デモ音源の選択) ----------
+
+el.addTrackBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!isEditor()) return;
+  el.demoTracksPanel.hidden = true;
+  el.addTrackMenu.hidden = !el.addTrackMenu.hidden;
+});
+
+el.addFromFileBtn.addEventListener("click", () => {
+  el.addTrackMenu.hidden = true;
+  el.fileInput.click();
+});
+
+el.addFromDemoBtn.addEventListener("click", () => {
+  openDemoTracksPanel();
+});
+
+// メニュー/パネルの外側をクリックしたら閉じる
+document.addEventListener("click", (e) => {
+  if (!el.addTrackWrap.contains(e.target)) {
+    el.addTrackMenu.hidden = true;
+    el.demoTracksPanel.hidden = true;
+  }
+});
+
+async function openDemoTracksPanel() {
+  el.addTrackMenu.hidden = true;
+  el.demoTracksPanel.hidden = false;
+  el.demoTracksList.innerHTML = `<li class="demo-tracks-empty">読み込み中...</li>`;
+  try {
+    const res = await fetch("/api/demo-tracks");
+    const list = await res.json();
+    el.demoTracksList.innerHTML = "";
+    if (!Array.isArray(list) || list.length === 0) {
+      el.demoTracksList.innerHTML = `<li class="demo-tracks-empty">デモ音源がありません</li>`;
+      return;
+    }
+    for (const d of list) {
+      const li = document.createElement("li");
+      li.className = "demo-tracks-item";
+
+      const info = document.createElement("div");
+      info.className = "demo-tracks-info";
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "demo-tracks-name";
+      nameSpan.textContent = d.name;
+      info.appendChild(nameSpan);
+      const durSpan = document.createElement("span");
+      durSpan.className = "demo-tracks-duration";
+      durSpan.textContent = fmtTime(d.duration);
+      info.appendChild(durSpan);
+      li.appendChild(info);
+
+      const addBtn = document.createElement("button");
+      addBtn.className = "btn tiny primary";
+      addBtn.textContent = "追加";
+      addBtn.disabled = !isEditor();
+      addBtn.addEventListener("click", () => {
+        el.demoTracksPanel.hidden = true;
+        addDemoTrack(d.id, d.name);
+      });
+      li.appendChild(addBtn);
+
+      el.demoTracksList.appendChild(li);
+    }
+  } catch (err) {
+    el.demoTracksList.innerHTML = `<li class="demo-tracks-empty">読み込みに失敗しました</li>`;
+  }
+}
+
 // ---------- 描画 ----------
+
+// ---------- ズーム(横=時間軸 / 縦=トラックの高さ) ----------
+// どちらも「自分のブラウザでの見え方」だけの設定で、プロジェクトの共有データには含めない。
+// サーバーへの同期は行わないため、他の人の画面には一切影響しない。
+
+function setPxPerSec(value) {
+  PX_PER_SEC = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, Math.round(value)));
+  renderAll();
+}
+
+function setTrackH(value) {
+  trackH = Math.min(MAX_TRACK_H, Math.max(MIN_TRACK_H, Math.round(value)));
+  document.documentElement.style.setProperty("--track-h", `${trackH}px`);
+  // 高さを詰めすぎるとラベル内のM/Sボタンやフェーダーが収まらないため、
+  // 一定以下ではトラック名だけの簡易表示に切り替える
+  el.tracksContainer.classList.toggle("compact-labels", trackH <= COMPACT_TRACK_H_THRESHOLD);
+}
+
+el.zoomInH.addEventListener("click", () => setPxPerSec(PX_PER_SEC * ZOOM_STEP));
+el.zoomOutH.addEventListener("click", () => setPxPerSec(PX_PER_SEC / ZOOM_STEP));
+el.zoomInV.addEventListener("click", () => setTrackH(trackH * ZOOM_STEP));
+el.zoomOutV.addEventListener("click", () => setTrackH(trackH / ZOOM_STEP));
+
+// 全トラック・タイムライン全体の長さが、ちょうど画面に収まるよう横/縦のズームを自動計算する
+el.zoomFitBtn.addEventListener("click", () => {
+  const total = Math.max(1, timelineTotalDuration());
+  const availW = Math.max(100, el.workspaceBody.clientWidth - LABEL_WIDTH - 40);
+  setPxPerSec(availW / total);
+
+  const trackCount = Math.max(1, state.tracks.length);
+  const rulerAndPadding = 26 + 16; // ルーラーの高さ + workspace-bodyの余白ぶんの見込み
+  const availH = Math.max(MIN_TRACK_H, el.workspaceBody.clientHeight - rulerAndPadding);
+  setTrackH(availH / trackCount);
+});
 
 function timelineTotalDuration() {
   let maxT = 30;
@@ -684,26 +853,71 @@ function buildTrackControlsEl(track) {
   fader.disabled = !editing;
   fader.title = "トラックの音量";
 
-  const valueLabel = document.createElement("span");
-  valueLabel.className = "track-volume-value";
-  valueLabel.textContent = `${fader.value}%`;
+  // 数値を直接タイプしても調整できるよう、表示はテキストではなく<input type="number">にする
+  const valueWrap = document.createElement("span");
+  valueWrap.className = "track-volume-value-wrap";
 
-  // ドラッグ中はローカルに即反映(再生中ならリアルタイムにも反映)し、
-  // 指を離した(change)タイミングでサーバーへ同期する
+  const valueInput = document.createElement("input");
+  valueInput.type = "number";
+  valueInput.className = "track-volume-value";
+  valueInput.min = "0";
+  valueInput.max = "150";
+  valueInput.step = "1";
+  valueInput.value = fader.value;
+  valueInput.disabled = !editing;
+  valueInput.title = "数値を入力して音量を調整(0〜150%)";
+
+  const unitLabel = document.createElement("span");
+  unitLabel.className = "track-volume-unit";
+  unitLabel.textContent = "%";
+
+  // ドラッグ/入力中はローカルに即反映(再生中ならリアルタイムにも反映)し、
+  // 指を離した・入力を確定した(change)タイミングでサーバーへ同期する
+  function applyVolumePercent(percent) {
+    const vol = percent / 100;
+    track.volume = vol;
+    fader.value = String(percent);
+    valueInput.value = String(percent);
+    applyLiveMixToActiveNodes();
+  }
+
   fader.addEventListener("input", () => {
     if (!isEditor()) return;
-    const vol = Number(fader.value) / 100;
-    track.volume = vol;
-    valueLabel.textContent = `${fader.value}%`;
-    applyLiveMixToActiveNodes();
+    applyVolumePercent(Number(fader.value));
   });
   fader.addEventListener("change", () => {
     if (!isEditor()) return;
     syncProject();
   });
 
+  valueInput.addEventListener("input", () => {
+    if (!isEditor()) return;
+    const n = parseInt(valueInput.value, 10);
+    if (Number.isNaN(n)) return; // 入力途中(空など)はいったん無視し、確定時に補正する
+    applyVolumePercent(Math.min(150, Math.max(0, n)));
+  });
+  valueInput.addEventListener("change", () => {
+    if (!isEditor()) return;
+    // 空欄や範囲外のまま確定された場合は、有効な値に補正してから同期する
+    let n = parseInt(valueInput.value, 10);
+    if (Number.isNaN(n)) n = Math.round((track.volume ?? 1) * 100);
+    applyVolumePercent(Math.min(150, Math.max(0, n)));
+    syncProject();
+  });
+  valueInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      valueInput.blur(); // blurでchangeが発火し、確定・同期される
+    }
+  });
+  valueInput.addEventListener("focus", () => valueInput.select());
+  valueInput.addEventListener("click", (e) => e.stopPropagation());
+
+  valueWrap.appendChild(valueInput);
+  valueWrap.appendChild(unitLabel);
+
   wrap.appendChild(fader);
-  wrap.appendChild(valueLabel);
+  wrap.appendChild(valueWrap);
   return wrap;
 }
 

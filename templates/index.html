@@ -13,10 +13,18 @@
       <span id="currentTimeLabel" class="current">0:00</span> / <span id="totalTimeLabel">0:00</span>
     </div>
     <div class="toolbar">
-      <label class="file-btn">
-        + ファイルを追加
+      <div class="add-track-wrap" id="addTrackWrap">
+        <button id="addTrackBtn" class="file-btn" type="button">+ ファイルを追加 ▾</button>
         <input type="file" id="fileInput" accept="audio/*" multiple hidden>
-      </label>
+        <div class="add-track-menu" id="addTrackMenu" hidden>
+          <button id="addFromFileBtn" class="add-track-menu-item" type="button">📁 ファイルから追加</button>
+          <button id="addFromDemoBtn" class="add-track-menu-item" type="button">🎵 デモ音源を追加</button>
+        </div>
+        <div class="demo-tracks-panel" id="demoTracksPanel" hidden>
+          <div class="demo-tracks-panel-title">デモ音源を追加</div>
+          <ul class="demo-tracks-list" id="demoTracksList"></ul>
+        </div>
+      </div>
       <button id="playBtn" class="btn">▶ 再生</button>
       <button id="stopBtn" class="btn">■ 停止</button>
       <div class="master-meter" id="masterMeter" title="マスター出力レベル(0 / -12 / -24 / -36 / -48 / -60dB)">
@@ -36,6 +44,14 @@
       <button id="cutBtn" class="btn" title="選択中のクリップを再生位置でカット">✂ カット</button>
       <button id="deleteBtn" class="btn" title="選択中のクリップを削除">🗑 削除</button>
       <button id="clearUploadsBtn" class="btn" title="サーバーに保存されている音源ファイルを全て削除します">🧹 音源を全削除</button>
+      <div class="zoom-controls" title="表示のズーム(自分の画面だけに反映され、他の人には影響しません)">
+        <span class="zoom-controls-label">🔍</span>
+        <button id="zoomOutH" class="btn tiny" type="button" title="横方向に縮小(時間軸)">H−</button>
+        <button id="zoomInH" class="btn tiny" type="button" title="横方向に拡大(時間軸)">H+</button>
+        <button id="zoomOutV" class="btn tiny" type="button" title="縦方向に縮小(トラックの高さ)">V−</button>
+        <button id="zoomInV" class="btn tiny" type="button" title="縦方向に拡大(トラックの高さ)">V+</button>
+        <button id="zoomFitBtn" class="btn tiny" type="button" title="全トラック・全体の長さが画面に収まるように自動調整">⛶ 全体表示</button>
+      </div>
       <span class="spacer"></span>
       <select id="formatSelect" class="select">
         <option value="wav">WAV</option>
@@ -65,7 +81,7 @@
   <main class="editor">
     <div class="workspace" id="workspace">
       <div id="status" class="status"></div>
-      <div class="workspace-body">
+      <div class="workspace-body" id="workspaceBody">
         <div class="ruler-wrap">
           <div class="track-labels-spacer"></div>
           <div id="ruler" class="ruler"></div>
