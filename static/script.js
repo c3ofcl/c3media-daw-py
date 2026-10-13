@@ -1537,3 +1537,10 @@ el.exportBtn.addEventListener("click", async () => {
 
 // 初期描画
 renderAll();
+
+//----------DAW編集外の機能----------
+
+window.addEventListener('beforeunload',(event) => {
+  event.preventDefault(); //一般ブラウザ用
+  event.returnValue = ''; //旧ブラウザ用
+});
