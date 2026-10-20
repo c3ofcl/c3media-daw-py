@@ -1141,8 +1141,11 @@ function onClipRightClick(clip, sec, clientX, clientY) {
   el.clipMenu.classList.remove("hidden");
 }
 
+// ---------- カット / 削除 ----------
+
 el.clipCutBtn.addEventListener("click", () => {
-   if (!isEditor()) {
+  el.clipMenu.classList.add("hidden");
+  if (!isEditor()) {
     setStatus("編集権がありません", true);
     return;
   }
@@ -1180,8 +1183,6 @@ el.clipCutBtn.addEventListener("click", () => {
   renderAll();
   syncProject();
 });
-
-// ---------- カット / 削除 ----------
 
 el.cutBtn.addEventListener("click", () => {
   if (!isEditor()) {
