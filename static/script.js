@@ -1140,6 +1140,11 @@ function onClipRightClick(clip, sec, clientX, clientY) {
   el.clipMenu.style.top = `${clientY}px`;
   el.clipMenu.classList.remove("hidden");
 }
+document.addEventListener("mousedown", (e) => {
+  if (!el.clipMenu.contains(e.target)) {
+    el.clipMenu.classList.add("hidden");
+  }
+});
 
 // ---------- カット / 削除 ----------
 
