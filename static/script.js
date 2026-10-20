@@ -78,6 +78,8 @@ const el = {
   participantsPanel: document.getElementById("participantsPanel"),
   participantsList: document.getElementById("participantsList"),
   participantsCount: document.getElementById("participantsCount"),
+  clipMenu: document.getElementById("clipMenu"),
+  clipCutBtn: document.getElementById("clipCutBtn"),
 };
 
 function setStatus(msg, isError = false) {
@@ -961,6 +963,7 @@ function buildClipEl(clip) {
   });
 
   attachDrag(div, clip);
+  attachContextMenu(div, clip);
   attachResize(leftHandle, clip, "left");
   attachResize(rightHandle, clip, "right");
 
@@ -1116,6 +1119,67 @@ function attachResize(handleEl, clip, side) {
     document.addEventListener("mouseup", onUp);
   });
 }
+
+//----------トラックの右クリック機能（カット・※コピー・※ペースト用※開発中）----------
+
+function attachContextMenu(clipEl, clip) {
+  clipEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isEditor()) return;
+
+    const laneRect = clipEl.parentElement.getBoundingClientRect();
+    const sec = Math.max(0, (e.clientX - laneRect.left) / PX_PER_SEC);
+
+    onClipRightClick(clip, sec, e.clientX, e.clientY);
+  });
+}
+
+function onClipRightClick(clip, sec, clientX, clientY) {
+  el.clipMenu.style.left = `${clientX}px`;
+  el.clipMenu.style.top = `${clientY}px`;
+  el.clipMenu.classList.remove("hidden");
+}
+
+el.clipCutBtn.addEventListener("click", () => {
+   if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  if (!state.selectedClipId) {
+    setStatus("カットするクリップを選択してください", true);
+    return;
+  }
+  const found = findClip(state.selectedClipId);
+  if (!found) return;
+  const { clip, track } = found;
+
+  const clipStartT = clip.timelineStart;
+  const clipEndT = clip.timelineStart + (clip.trimEnd - clip.trimStart);
+  const playhead = state.playheadSec;
+
+  if (playhead <= clipStartT + 0.05 || playhead >= clipEndT - 0.05) {
+    setStatus("カットしたい位置に再生ヘッドを合わせてから実行してください", true);
+    return;
+  }
+
+  const cutLocal = clip.trimStart + (playhead - clipStartT); // 元ファイル内でのカット位置
+
+  const clipB = {
+    ...clip,
+    clipId: `c${++clipCounter}`,
+    trimStart: cutLocal,
+    timelineStart: clip.timelineStart + (cutLocal - clip.trimStart),
+  };
+  clip.trimEnd = cutLocal;
+
+  const idx = track.clips.indexOf(clip);
+  track.clips.splice(idx + 1, 0, clipB);
+
+  setStatus("カットしました。2つのクリップに分割されました。");
+  renderAll();
+  syncProject();
+});
 
 // ---------- カット / 削除 ----------
 
