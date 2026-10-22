@@ -573,6 +573,28 @@ async function addDemoTrack(demoId, demoName) {
   }
 }
 
+// ---------- 「+ トラックを追加」ドロップダウン ----------
+
+el.addEmptyTrackBtn.addEventListener("click", () => {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  trackCounter += 1;
+  const trackId = `t${trackCounter}`;
+  state.tracks.push({
+    trackId,
+    label: `トラック ${trackCounter}`,
+    volume: 1,
+    muted: false,
+    solo: false,
+    clips: [],
+  });
+  renderAll();
+  syncProject();
+  setStatus("空のトラックを追加しました");
+});
+
 // ---------- 「+ ファイルを追加」ドロップダウン(ファイル / デモ音源の選択) ----------
 
 el.addTrackBtn.addEventListener("click", (e) => {
