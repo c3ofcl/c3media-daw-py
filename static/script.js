@@ -42,6 +42,7 @@ const el = {
   fileBtnLabel: document.querySelector(".file-btn"), // 現在は<button id="addTrackBtn">
   addTrackWrap: document.getElementById("addTrackWrap"),
   addTrackBtn: document.getElementById("addTrackBtn"),
+  addEmptyTrackBtn: document.getElementById("addEmptyTrackBtn"),
   addTrackMenu: document.getElementById("addTrackMenu"),
   addFromFileBtn: document.getElementById("addFromFileBtn"),
   addFromDemoBtn: document.getElementById("addFromDemoBtn"),
