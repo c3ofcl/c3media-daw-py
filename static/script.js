@@ -21,6 +21,7 @@ let trackH = DEFAULT_TRACK_H; // 縦方向(トラックの高さ)のズーム。
 const state = {
   tracks: [],       // [{trackId, label, clips: [clip, ...]}]
   selectedClipId: null,
+  selectedTrackId: null,
   playheadSec: 0,
   isPlaying: false,
   bufferCache: {},     // fileId -> Promise<AudioBuffer> (デコード済み音声データ、クリップ間で共有)
@@ -845,6 +846,9 @@ function renderAll() {
   // 既存の track-row / grid-line / playhead を削除して再構築
   el.tracksContainer.querySelectorAll(".track-row, .grid-line, .playhead").forEach((n) => n.remove());
   state.meterFillEls = {}; // トラック削除で消えた要素の古い参照が残らないようにする
+  if (state.selectedTrackId && !state.tracks.some((t) => t.trackId === state.selectedTrackId)) {
+  state.selectedTrackId = null;
+}
 
   const total = timelineTotalDuration();
   renderGridLines(total);
@@ -852,6 +856,8 @@ function renderAll() {
   for (const track of state.tracks) {
     const row = document.createElement("div");
     row.className = "track-row";
+    row.dataset.trackId = track.trackId;
+    if (state.selectedTrackId === track.trackId) row.classList.add("track-row--selected");
     if (isEffectivelyMuted(track, state.tracks)) {
       row.classList.add("track-row--silenced");
     }
@@ -888,6 +894,7 @@ function renderAll() {
     lane.className = "track-lane";
     lane.style.width = `${total * PX_PER_SEC}px`;
     lane.dataset.trackId = track.trackId;
+      if (track.clips.length === 0) lane.classList.add("track-lane--empty");
     lane.addEventListener("click", (e) => {
       if (e.target === lane) seekFromClientX(e.clientX, lane);
     });
@@ -1274,6 +1281,120 @@ document.addEventListener("mousedown", (e) => {
   if (!el.clipMenu.contains(e.target)) {
     el.clipMenu.classList.add("hidden");
   }
+});
+
+// ---------- 空トラックの右クリック → ファイル追加 ----------
+
+const trackMenu = document.getElementById("trackMenu");
+const trackAddFileBtn = document.getElementById("trackAddFileBtn");
+const trackFileInput = document.getElementById("trackFileInput");
+let trackMenuTarget = { trackId: null, sec: 0 };
+
+function openTrackMenu(trackId, sec, x, y) {
+  trackMenuTarget = { trackId, sec };
+  el.clipMenu.classList.add("hidden");
+  trackMenu.style.left = `${x}px`;
+  trackMenu.style.top = `${y}px`;
+  trackMenu.classList.remove("hidden");
+}
+
+document.addEventListener("mousedown", (e) => {
+  if (!trackMenu.contains(e.target)) trackMenu.classList.add("hidden");
+});
+
+trackAddFileBtn.addEventListener("click", () => {
+  trackMenu.classList.add("hidden");
+  trackFileInput.click();
+});
+
+trackFileInput.addEventListener("change", async (e) => {
+  const file = (e.target.files || [])[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  await uploadFileToTrack(file, trackMenuTarget.trackId, trackMenuTarget.sec);
+});
+
+async function uploadFileToTrack(file, trackId, startSec) {
+  setStatus(`アップロード中: ${file.name} ...`);
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "X-User-Token": collab.token },
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(`エラー: ${data.error || "アップロードに失敗しました"}`, true);
+      return;
+    }
+    const track = state.tracks.find((t) => t.trackId === trackId);
+    if (!track) {
+      setStatus("追加先のトラックが見つかりません", true);
+      return;
+    }
+    track.clips.push({
+      clipId: `c${++clipCounter}`,
+      fileId: data.id,
+      ext: data.ext,
+      filename: data.filename,
+      url: data.url,
+      srcDuration: data.duration,
+      trimStart: 0,
+      trimEnd: data.duration,
+      timelineStart: Math.round(startSec * 100) / 100,
+      trackId,
+    });
+    track.label = data.filename;
+    loadBuffer(data.id, data.url).catch(() => {});
+    renderAll();
+    syncProject();
+    setStatus(`追加しました: ${file.name}`);
+  } catch (err) {
+    setStatus(`通信エラー: ${err}`, true);
+  }
+}
+
+// トラックを選択状態にする(DOMは作り直さず、クラスだけ付け替える)
+function selectTrack(trackId) {
+  state.selectedTrackId = trackId;
+  el.tracksContainer.querySelectorAll(".track-row").forEach((r) => {
+    r.classList.toggle("track-row--selected", r.dataset.trackId === trackId);
+  });
+}
+
+// トラック領域をクリックしたら、そのトラックを選択する。
+// クリップのドラッグ処理が stopPropagation するので、キャプチャ段階(第3引数 true)で受ける
+el.tracksContainer.addEventListener(
+  "mousedown",
+  (e) => {
+    if (e.button !== 0) return;
+    const row = e.target.closest(".track-row");
+    if (row) selectTrack(row.dataset.trackId);
+  },
+  true
+);
+
+// トラック領域の右クリック。標準メニューは出さず、空トラックならファイル追加メニューを出す
+el.tracksContainer.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  // 再生ヘッドなどが上に重なっていても、真下のトラック行を探す
+  const row = document
+    .elementsFromPoint(e.clientX, e.clientY)
+    .find((n) => n.classList && n.classList.contains("track-row"));
+  if (!row) return;
+  selectTrack(row.dataset.trackId);
+  if (!isEditor()) return;
+  const track = state.tracks.find((t) => t.trackId === row.dataset.trackId);
+  if (!track || track.clips.length > 0) return;
+  const laneRect = row.querySelector(".track-lane").getBoundingClientRect();
+  const sec = Math.max(0, (e.clientX - laneRect.left) / PX_PER_SEC); // トラック名側なら0秒
+  openTrackMenu(track.trackId, sec, e.clientX, e.clientY);
 });
 
 // ---------- カット / 削除 ----------

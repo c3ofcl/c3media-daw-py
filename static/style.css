@@ -975,3 +975,30 @@ body {
   cursor: pointer;
 }
 .context-menu-item:hover { background: var(--panel-2); }
+
+.track-row--selected {
+  background: rgba(255, 138, 91, 0.07);
+}
+.track-row--selected .track-label {
+  box-shadow: inset 3px 0 0 var(--accent-2);
+  color: var(--text);
+}
+
+.track-lane--empty {
+  outline: 1px dashed var(--border);
+  outline-offset: -5px;
+  border-radius: 6px;
+}
+.track-lane--empty::after {
+  content: "右クリックでファイルを追加";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.tracks-container.view-only .track-lane--empty::after {
+  display: none;
+}
