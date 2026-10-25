@@ -808,10 +808,22 @@ body {
 }
 .clip:active { cursor: grabbing; }
 
+/* 波形(Canvas)。クリップの背景の上・ラベルとつまみの下に敷く。操作はクリップ本体が受けるのでクリックは透過 */
+.clip .clip-wave {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
 .clip .clip-label {
+  position: relative;
+  z-index: 1; /* 波形より手前に出す */
   font-size: 11px;
   padding: 4px 6px;
   color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); /* 波形に重なっても読めるように */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -820,6 +832,7 @@ body {
 
 .clip .handle {
   position: absolute;
+  z-index: 2;
   top: 0;
   bottom: 0;
   width: 8px;

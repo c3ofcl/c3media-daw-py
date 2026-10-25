@@ -14,6 +14,7 @@ const MAX_TRACK_H = 160;
 const DEFAULT_TRACK_H = 72;
 const COMPACT_TRACK_H_THRESHOLD = 50; // これ以下の高さでは、トラックラベル内をトラック名だけの簡易表示にする
 const ZOOM_STEP = 1.25;
+const WAVE_TILE_PX = 1200; // 波形Canvasの1枚あたりの最大幅(px)。Canvasの幅の上限(約32000px)を超えないよう分割する
 
 let trackH = DEFAULT_TRACK_H; // 縦方向(トラックの高さ)のズーム。--track-h と同期する
 
@@ -23,6 +24,8 @@ const state = {
   playheadSec: 0,
   isPlaying: false,
   bufferCache: {},     // fileId -> Promise<AudioBuffer> (デコード済み音声データ、クリップ間で共有)
+  peaksCache: {},      // fileId -> 波形表示用のピーク(Waveform.computePeaksの結果)。ファイルごとに1回だけ計算する
+  peaksRequested: {},  // fileId -> true (ピークの計算を依頼済み。二重に依頼しないため)
   activeSources: [],   // 再生中のAudioBufferSourceNode一覧
   activeGainNodes: {}, // trackId -> GainNode (再生中のトラック音量を反映するためのノード)
   activeAnalysers: {}, // trackId -> AnalyserNode (dBメーター表示用。信号経路には影響しない)
@@ -487,6 +490,84 @@ function loadBuffer(fileId, url) {
   return state.bufferCache[fileId];
 }
 
+// ---------- 波形表示 ----------
+// クリップごとに、元の音声の「トリミングで残っている範囲」の波形をCanvasで描く。
+// ピークの計算と描画の中身は waveform.js にある(DOMに依存しない部分)。ここは画面との橋渡し:
+//   - 長いクリップはタイル(Canvas)に分け、画面に見えているタイルだけを描く(見えていない所は描かない)
+//   - 音声のデコードが終わっていないうちは描けないので、終わり次第あらためて描く
+//   - renderAll()のたびにDOMが作り直されるため、その都度ここで描き直す
+
+let waveRafPending = false;
+
+// ファイルのピークを(まだなら)計算しておく。終わったら見えているタイルを描き直す
+function requestPeaks(fileId, url) {
+  if (state.peaksCache[fileId] || state.peaksRequested[fileId]) return;
+  state.peaksRequested[fileId] = true;
+  loadBuffer(fileId, url)
+    .then((buffer) => {
+      state.peaksCache[fileId] = Waveform.computePeaks(buffer);
+    })
+    .catch(() => {}) // デコードできない場合は波形なしのまま(クリップ自体は使える)
+    .then(() => scheduleWaveDraw());
+}
+
+function drawWaveTile(canvas, peaks) {
+  const info = canvas._waveInfo;
+  const cssHeight = canvas.clientHeight;
+  if (!info || cssHeight <= 0) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1); // 高解像度画面でもメモリを使いすぎないよう2倍まで
+  const width = Math.max(1, Math.round(info.widthPx * dpr));
+  const height = Math.max(1, Math.round(cssHeight * dpr));
+  canvas.width = width;
+  canvas.height = height;
+  Waveform.drawPeaks(canvas.getContext("2d"), peaks, {
+    startSec: info.startSec,
+    secPerPx: 1 / (info.pxPerSec * dpr),
+    width,
+    height,
+    color: "rgba(255, 255, 255, 0.55)",
+  });
+  info.drawn = true;
+}
+
+// 未描画のタイルのうち、スクロール領域の表示範囲(+余白)に入っているものを描く
+function drawVisibleWaveTiles() {
+  const view = el.workspaceBody.getBoundingClientRect();
+  const margin = 400; // 少し先まで描いておくと、スクロールしたときに空白が見えにくい
+  el.tracksContainer.querySelectorAll("canvas.clip-wave").forEach((canvas) => {
+    const info = canvas._waveInfo;
+    if (!info || info.drawn) return;
+    const r = canvas.getBoundingClientRect();
+    if (
+      r.right < view.left - margin ||
+      r.left > view.right + margin ||
+      r.bottom < view.top - margin ||
+      r.top > view.bottom + margin
+    ) {
+      return;
+    }
+    const peaks = state.peaksCache[info.fileId];
+    if (peaks) {
+      drawWaveTile(canvas, peaks);
+    } else {
+      requestPeaks(info.fileId, info.url);
+    }
+  });
+}
+
+// スクロールやリサイズは頻繁に起きるので、描画は次のフレームにまとめる
+function scheduleWaveDraw() {
+  if (waveRafPending) return;
+  waveRafPending = true;
+  requestAnimationFrame(() => {
+    waveRafPending = false;
+    drawVisibleWaveTiles();
+  });
+}
+
+el.workspaceBody.addEventListener("scroll", scheduleWaveDraw, { passive: true });
+window.addEventListener("resize", scheduleWaveDraw);
+
 // ---------- アップロード ----------
 
 el.fileInput.addEventListener("change", async (e) => {
@@ -555,7 +636,7 @@ async function addDemoTrack(demoId, demoName) {
   }
   setStatus(`デモ音源を追加中: ${demoName} ...`);
   try {
-    const res = await fetch(`/api/demo-tracks/${demoId}/add`, {
+    const res = await fetch(`/api/demo-tracks/${encodeURIComponent(demoId)}/add`, {
       method: "POST",
       headers: { "X-User-Token": collab.token },
     });
@@ -630,7 +711,7 @@ async function openDemoTracksPanel() {
     const list = await res.json();
     el.demoTracksList.innerHTML = "";
     if (!Array.isArray(list) || list.length === 0) {
-      el.demoTracksList.innerHTML = `<li class="demo-tracks-empty">デモ音源がありません</li>`;
+      el.demoTracksList.innerHTML = `<li class="demo-tracks-empty">デモ音源がありません。サーバーの demo フォルダに音声ファイルを置くと、ここに表示されます。</li>`;
       return;
     }
     for (const d of list) {
@@ -683,6 +764,7 @@ function setTrackH(value) {
   // 高さを詰めすぎるとラベル内のM/Sボタンやフェーダーが収まらないため、
   // 一定以下ではトラック名だけの簡易表示に切り替える
   el.tracksContainer.classList.toggle("compact-labels", trackH <= COMPACT_TRACK_H_THRESHOLD);
+  renderAll(); // クリップの高さが変わるので、波形を新しい高さで描き直す
 }
 
 el.zoomInH.addEventListener("click", () => setPxPerSec(PX_PER_SEC * ZOOM_STEP));
@@ -829,6 +911,9 @@ function renderAll() {
   attachScrub(handle, el.ruler); // つまみ(丸)からもスクラブできるようにする。座標計算はルーラー基準。
 
   el.tracksContainer.appendChild(playhead);
+
+  // DOMへ追加し終えてから(位置が確定してから)、見えている波形を描く
+  drawVisibleWaveTiles();
 }
 
 // トラックラベル内の操作行(ミュート/ソロボタン + 音量フェーダー)を組み立てる
@@ -965,6 +1050,28 @@ function buildClipEl(clip) {
   div.style.left = `${clip.timelineStart * PX_PER_SEC}px`;
   div.style.width = `${Math.max(dur * PX_PER_SEC, 10)}px`;
   div.dataset.clipId = clip.clipId;
+
+  // 波形(Canvas)。横幅が大きいクリップはタイルに分け、描画は drawVisibleWaveTiles() が行う。
+  // 内側の幅はクリップの左右の枠線(1pxずつ)を除いた分で、時間の対応もその1px分を考慮している。
+  const innerPx = Math.max(1, Math.max(dur * PX_PER_SEC, 10) - 2);
+  for (let offset = 0; offset < innerPx; offset += WAVE_TILE_PX) {
+    const tileWidth = Math.min(WAVE_TILE_PX, innerPx - offset);
+    const tile = document.createElement("canvas");
+    tile.className = "clip-wave";
+    tile.style.left = `${offset}px`;
+    tile.style.width = `${tileWidth}px`;
+    tile.width = 1; // 描画するまでは最小サイズにして、メモリを使わない
+    tile.height = 1;
+    tile._waveInfo = {
+      fileId: clip.fileId,
+      url: clip.url,
+      startSec: clip.trimStart + (offset + 1) / PX_PER_SEC,
+      pxPerSec: PX_PER_SEC,
+      widthPx: tileWidth,
+      drawn: false,
+    };
+    div.appendChild(tile);
+  }
 
   const labelDiv = document.createElement("div");
   labelDiv.className = "clip-label";
@@ -1301,6 +1408,8 @@ async function deleteTrackFile(track) {
       return;
     }
     delete state.bufferCache[fileId];
+    delete state.peaksCache[fileId];
+    delete state.peaksRequested[fileId];
   }
 
   if (track.clips.some((c) => c.clipId === state.selectedClipId)) {
@@ -1337,6 +1446,8 @@ el.clearUploadsBtn.addEventListener("click", async () => {
     state.tracks = [];
     state.selectedClipId = null;
     state.bufferCache = {};
+    state.peaksCache = {};
+    state.peaksRequested = {};
     setStatus(`削除しました(${data.deleted ?? 0}件)`);
     renderAll();
     syncProject();
