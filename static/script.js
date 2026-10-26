@@ -854,57 +854,56 @@ function renderAll() {
   renderGridLines(total);
 
   for (const track of state.tracks) {
-    const row = document.createElement("div");
-    row.className = "track-row";
-    row.dataset.trackId = track.trackId;
-    if (state.selectedTrackId === track.trackId) row.classList.add("track-row--selected");
-    if (isEffectivelyMuted(track, state.tracks)) {
-      row.classList.add("track-row--silenced");
-    }
+  const row = document.createElement("div");
+  row.className = "track-row";
+  row.dataset.trackId = track.trackId;
+  if (state.selectedTrackId === track.trackId) row.classList.add("track-row--selected");
+  if (isEffectivelyMuted(track, state.tracks)) {
+    row.classList.add("track-row--silenced");
+  }
 
-    const label = document.createElement("div");
-    label.className = "track-label";
+  const label = document.createElement("div");
+  label.className = "track-label";
 
-    const labelTop = document.createElement("div");
-    labelTop.className = "track-label-top";
+  const labelTop = document.createElement("div");
+  labelTop.className = "track-label-top";
 
-    const labelText = document.createElement("span");
-    labelText.className = "track-label-text";
-    labelText.textContent = track.label;
-    labelText.title = track.label;
-    labelTop.appendChild(labelText);
+  const labelText = document.createElement("span");
+  labelText.className = "track-label-text";
+  labelText.textContent = track.label;
+  labelText.title = track.label;
+  labelTop.appendChild(labelText);
 
-    const trackDeleteBtn = document.createElement("button");
-    trackDeleteBtn.className = "track-delete-btn";
-    trackDeleteBtn.title = "この音源ファイルをサーバーから削除";
-    trackDeleteBtn.textContent = "🗑";
-    trackDeleteBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      deleteTrackFile(track);
-    });
-    labelTop.appendChild(trackDeleteBtn);
+  const trackDeleteBtn = document.createElement("button");
+  trackDeleteBtn.className = "track-delete-btn";  trackDeleteBtn.title = "この音源ファイルをサーバーから削除";
+  trackDeleteBtn.textContent = "🗑";
+  trackDeleteBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+    deleteTrackFile(track);
+  });
+  labelTop.appendChild(trackDeleteBtn);
 
-    label.appendChild(labelTop);
-    label.appendChild(buildTrackControlsEl(track));
-    label.appendChild(buildTrackMeterEl(track));
+  label.appendChild(labelTop);
+  label.appendChild(buildTrackControlsEl(track));
+  label.appendChild(buildTrackMeterEl(track));
 
-    row.appendChild(label);
+  row.appendChild(label);
 
-    const lane = document.createElement("div");
-    lane.className = "track-lane";
-    lane.style.width = `${total * PX_PER_SEC}px`;
-    lane.dataset.trackId = track.trackId;
-      if (track.clips.length === 0) lane.classList.add("track-lane--empty");
-    lane.addEventListener("click", (e) => {
-      if (e.target === lane) seekFromClientX(e.clientX, lane);
-    });
+  const lane = document.createElement("div");
+  lane.className = "track-lane";
+  lane.style.width = `${total * PX_PER_SEC}px`;
+  lane.dataset.trackId = track.trackId;
+    if (track.clips.length === 0) lane.classList.add("track-lane--empty");
+  lane.addEventListener("click", (e) => {
+    if (e.target === lane) seekFromClientX(e.clientX, lane);
+  });
 
-    for (const clip of track.clips) {
-      lane.appendChild(buildClipEl(clip));
-    }
+  for (const clip of track.clips) {
+    lane.appendChild(buildClipEl(clip));
+  }
 
-    row.appendChild(lane);
-    el.tracksContainer.appendChild(row);
+  row.appendChild(lane);
+  el.tracksContainer.appendChild(row);
   }
 
   const playhead = document.createElement("div");
@@ -1151,11 +1150,32 @@ function bestSnapDelta(target, edgeCandidates) {
   return best;
 }
 
-// ---------- ドラッグ移動 ----------
+// ---------- ドラッグ移動※横移動を追加 ----------
+
+// マウスのY座標の位置にあるトラックのレーンを返す(どのレーンの上でもなければ null)
+function laneAtY(clientY) {
+  for (const lane of el.tracksContainer.querySelectorAll(".track-lane")) {
+    const r = lane.getBoundingClientRect();
+    if (clientY >= r.top && clientY < r.bottom) return lane;
+  }
+  return null;
+}
+
+// クリップを別のトラックへ移す(データの付け替え)
+function moveClipToTrack(clipId, toTrackId) {
+  const found = findClip(clipId);
+  const to = state.tracks.find((t) => t.trackId === toTrackId);
+  if (!found || !to || found.track === to) return false;
+  found.track.clips.splice(found.track.clips.indexOf(found.clip), 1);
+  to.clips.push(found.clip);
+  found.clip.trackId = to.trackId;
+  return true;
+}
 
 function attachDrag(clipEl, clip) {
   clipEl.addEventListener("mousedown", (e) => {
     if (e.target.classList.contains("handle")) return;
+    if (e.button !== 0) return; // 右クリックではドラッグを始めない
     if (!isEditor()) return; // 閲覧者はクリップを動かせない
     e.preventDefault();
     e.stopPropagation();
@@ -1164,6 +1184,11 @@ function attachDrag(clipEl, clip) {
     const startTimelineStart = clip.timelineStart;
     const dur = clip.trimEnd - clip.trimStart;
     const snapCandidates = collectSnapCandidates(clip.clipId);
+    const originTrackId = (findClip(clip.clipId) || {}).track
+      ? findClip(clip.clipId).track.trackId
+      : clip.trackId;
+    let targetTrackId = originTrackId;
+    clipEl.classList.add("dragging");
 
     function onMove(ev) {
       const dx = ev.clientX - startX;
@@ -1181,10 +1206,30 @@ function attachDrag(clipEl, clip) {
 
       clip.timelineStart = Math.max(0, newStart);
       clipEl.style.left = `${clip.timelineStart * PX_PER_SEC}px`;
+
+      // 縦方向: マウスがあるトラックのレーンへ、見た目だけ先に移す(どのレーンの上でもなければ直前のまま)
+      const lane = laneAtY(ev.clientY);
+      if (lane && lane.dataset.trackId !== targetTrackId) {
+        targetTrackId = lane.dataset.trackId;
+        lane.appendChild(clipEl);
+        el.tracksContainer.querySelectorAll(".track-lane").forEach((l) => {
+          l.classList.toggle(
+            "track-lane--drop-target",
+            l.dataset.trackId === targetTrackId && targetTrackId !== originTrackId
+          );
+        });
+      }
     }
     function onUp() {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      el.tracksContainer
+        .querySelectorAll(".track-lane--drop-target")
+        .forEach((l) => l.classList.remove("track-lane--drop-target"));
+      clipEl.classList.remove("dragging");
+      if (targetTrackId !== originTrackId && moveClipToTrack(clip.clipId, targetTrackId)) {
+        state.selectedTrackId = targetTrackId; // 移動先のトラックを選択状態にする
+      }
       renderAll();
       syncProject();
     }

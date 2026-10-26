@@ -1002,3 +1002,15 @@ body {
 .tracks-container.view-only .track-lane--empty::after {
   display: none;
 }
+
+/* ドラッグ中、移動先になるトラック */
+.track-lane--drop-target {
+  background: rgba(255, 138, 91, 0.12);
+  outline: 1px dashed var(--accent-2);
+  outline-offset: -3px;
+}
+/* ドラッグ中のクリップ */
+.clip.dragging {
+  opacity: 0.85;
+  box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.6);
+}
