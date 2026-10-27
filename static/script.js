@@ -1360,7 +1360,7 @@ trackFileInput.addEventListener("change", async (e) => {
     setStatus("編集権がありません", true);
     return;
   }
-  await uploadFileToTrack(file, trackMenuTarget.trackId, trackMenuTarget.sec);
+  await uploadFileToTrack(file, trackMenuTarget.trackId, state.playheadSec);
 });
 
 async function uploadFileToTrack(file, trackId, startSec) {
