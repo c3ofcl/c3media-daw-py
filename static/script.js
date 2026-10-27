@@ -1310,6 +1310,8 @@ function attachContextMenu(clipEl, clip) {
     e.stopPropagation();
     if (!isEditor()) return;
 
+    state.selectedClipId = clip.clipId; // 右クリックしたクリップを対象にする
+    renderAll();
     const laneRect = clipEl.parentElement.getBoundingClientRect();
     const sec = Math.max(0, (e.clientX - laneRect.left) / PX_PER_SEC);
 
@@ -1440,6 +1442,12 @@ el.tracksContainer.addEventListener("contextmenu", (e) => {
   const laneRect = row.querySelector(".track-lane").getBoundingClientRect();
   const sec = Math.max(0, (e.clientX - laneRect.left) / PX_PER_SEC); // トラック名側なら0秒
   openTrackMenu(track.trackId, sec, e.clientX, e.clientY);
+});
+
+// ---------- 右クリック → 削除 ----------
+document.getElementById("clipDeleteBtn").addEventListener("click", () => {
+  el.clipMenu.classList.add("hidden");
+  el.deleteBtn.click(); // 上部の「削除」ボタンと同じ処理を呼ぶ
 });
 
 // ---------- カット / 削除 ----------
