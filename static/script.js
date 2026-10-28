@@ -57,6 +57,7 @@ const el = {
   workspaceBody: document.getElementById("workspaceBody"),
   emptyHint: document.getElementById("emptyHint"),
   status: document.getElementById("status"),
+  rewindBtn: document.getElementById("rewindBtn"),
   playBtn: document.getElementById("playBtn"),
   stopBtn: document.getElementById("stopBtn"),
   masterMeterFill: document.getElementById("masterMeterFill"),
@@ -1819,6 +1820,17 @@ el.stopBtn.addEventListener("click", () => {
   stopPlayback();
   setStatus("停止しました");
   renderAll();
+});
+
+// 再生ヘッドを0秒に戻す。ルーラーで再生ヘッドを動かしたときと同じく、再生中なら止めてから移動する。
+// 再生ヘッドは各自の画面だけの状態(共同編集で同期しない)なので、編集権がなくても使える。
+el.rewindBtn.addEventListener("click", () => {
+  if (state.isPlaying) stopPlayback();
+  state.playheadSec = 0;
+  renderPlayheadOnly();
+  // タイムラインが右へスクロールされていても、0秒の位置(左端)が見えるようにする
+  el.workspaceBody.scrollLeft = 0;
+  setStatus("0:00 に戻しました");
 });
 
 // ---------- 書き出し(結合) ----------
