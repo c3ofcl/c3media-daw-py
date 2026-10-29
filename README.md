@@ -14,16 +14,51 @@
    - macOS: `brew install ffmpeg`
    - Ubuntu/Debian: `sudo apt install ffmpeg`
    - Windows: https://ffmpeg.org/download.html からダウンロードし、PATHに追加してください。
-3. 依存パッケージをインストール:
+3. プロジェクトのディレクトリに移動し、仮想環境（venv）を作成:
    ```bash
    cd "プロジェクトのカレントディレクトリ"
+   python -m venv .venv
+   ```
+   （macOS / Linux で `python` が見つからない場合は `python3` を使ってください。）
+4. 仮想環境を有効化:
+   - Windows (PowerShell):
+     ```powershell
+     .venv\Scripts\Activate.ps1
+     ```
+     「スクリプトの実行が無効」というエラーが出る場合は、先に次を実行してください:
+     ```powershell
+     Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+     ```
+   - Windows (コマンドプロンプト):
+     ```bat
+     .venv\Scripts\activate.bat
+     ```
+   - macOS / Linux:
+     ```bash
+     source .venv/bin/activate
+     ```
+   有効化に成功すると、プロンプトの先頭に `(.venv)` と表示されます。
+5. 依存パッケージを仮想環境内にインストール:
+   ```bash
    pip install -r requirements.txt
    ```
-4. サーバーを起動:
+6. サーバーを起動:
    ```bash
    python app.py
    ```
-5. ブラウザで `http://127.0.0.1:5000` を開いてください。
+   2回目以降は、手順4の「仮想環境を有効化」をしてから `python app.py` を実行するだけで起動できます。
+   作業を終えて仮想環境から抜けるときは `deactivate` を実行してください。
+
+   Windows では、プロジェクト直下の `start.bat` をダブルクリックしても起動できます
+   （手順3・5の仮想環境の作成とパッケージのインストールが済んでいる必要があります）。
+   起動と同時にブラウザが開きます。表示が間に合わなかった場合は再読み込みしてください。
+
+   macOS では、プロジェクト直下の `start.command` を Finder でダブルクリックすると、
+   ターミナルが開いて同じように起動します（終了はターミナルで Ctrl+C）。
+   - 初回に「開発元を確認できない」などと表示されて開けない場合は、右クリック →「開く」で許可してください。
+   - 「アクセス権がない」などで実行できない場合は、ターミナルでプロジェクトのディレクトリに移動し
+     `chmod +x start.command` を実行してください。
+7. ブラウザで `http://127.0.0.1:5000` を開いてください。
    同じネットワーク内にいる他の人は `http://<このPCのIPアドレス>:5000` にアクセスすると、
    同じプロジェクトに共同編集者(閲覧者)として参加できます。
 
