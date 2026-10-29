@@ -878,7 +878,13 @@ function renderAll() {
   const labelText = document.createElement("span");
   labelText.className = "track-label-text";
   labelText.textContent = track.label;
-  labelText.title = track.label;
+
+  labelText.title = isEditor() ? `${track.label}(ダブルクリックで名前を変更)` : track.label;
+  labelText.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    if (!isEditor()) return;
+    startRenameTrack(track, labelText);
+  });
   labelTop.appendChild(labelText);
 
   const trackDeleteBtn = document.createElement("button");
@@ -1590,6 +1596,8 @@ el.cutBtn.addEventListener("click", () => {
   syncProject();
 });
 
+// ここから削除機能
+
 el.deleteBtn.addEventListener("click", () => {
   if (!isEditor()) {
     setStatus("編集権がありません", true);
@@ -1610,6 +1618,39 @@ el.deleteBtn.addEventListener("click", () => {
   renderAll();
   syncProject();
 });
+
+// トラック名をその場で編集する(Enter/フォーカスを外す=確定、Esc=キャンセル)
+function startRenameTrack(track, labelTextEl) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "track-label-input";
+  input.value = track.label;
+  input.maxLength = 60;
+  labelTextEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  function finish(commit) {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (commit && name && name !== track.label) {
+      track.label = name;
+      syncProject();
+      setStatus(`トラック名を変更しました: ${name}`);
+    }
+    renderAll();
+  }
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("mousedown", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
+}
 
 // トラック1つ分の音源ファイルをサーバーから削除し、タイムラインからも取り除く
 async function deleteTrackFile(track) {

@@ -1029,3 +1029,16 @@ body {
   opacity: 0.85;
   box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.6);
 }
+
+/* トラック名変更 */
+.track-label-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--accent-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+  outline: none;
+}
