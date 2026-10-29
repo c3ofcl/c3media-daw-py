@@ -1465,7 +1465,7 @@ document.getElementById("clipDeleteBtn").addEventListener("click", () => {
 
 function updateEditButtons() {
   const off = state.isPlaying;
-  [el.cutBtn, el.deleteBtn, el.clipCutBtn, document.getElementById("clipDeleteBtn")].forEach((b) => {
+  [el.cutBtn, el.deleteBtn, el.clipCutBtn, document.getElementById("trackAddFileBtn"), document.getElementById("clipDeleteBtn"), document.getElementById("trackPasteBtn")].forEach((b) => {
     if (b) b.disabled = off;
   });
 }
