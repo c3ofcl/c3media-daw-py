@@ -82,11 +82,13 @@
 
 <!--後発追加/右クリック機能-->
   <div id="clipMenu" class="context-menu hidden">
-    <button id="clipCutBtn" class="context-menu-item">✂カット</button>
-    <button id="clipDeleteBtn" class="context-menu-item">🗑 削除</button>
+    <button id="clipCutBtn" class="context-menu-item"><span class="click-icon">✂</span> カット</button>
+    <button id="clipDeleteBtn" class="context-menu-item"><span class="click-icon">🗑</span> 削除</button>
+    <button id="clipCopyBtn" class="context-menu-item" type="button"><span class="click-icon">📋</span> コピー</button>
   </div>
   <div id="trackMenu" class="context-menu hidden">
-  <button id="trackAddFileBtn" class="context-menu-item" type="button">📁 ファイルを追加</button>
+    <button id="trackAddFileBtn" class="context-menu-item" type="button"><span class="click-icon">📁</span> ファイルを追加</button>
+    <button id="trackPasteBtn" class="context-menu-item" type="button"><span class="click-icon">📋</span> 貼り付け</button>
   </div>
   <input type="file" id="trackFileInput" accept="audio/*" hidden>
 <!--後発追加/ここまで-->

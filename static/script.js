@@ -23,7 +23,12 @@ const state = {
   selectedClipId: null,
   selectedTrackId: null,
   playheadSec: 0,
-  isPlaying: false,
+  _isPlaying: false,
+get isPlaying() { return this._isPlaying; },
+set isPlaying(v) {
+  this._isPlaying = v;
+  updateEditButtons(); // 再生状態が変わるたびに、カット/削除の有効・無効を更新
+},
   bufferCache: {},     // fileId -> Promise<AudioBuffer> (デコード済み音声データ、クリップ間で共有)
   peaksCache: {},      // fileId -> 波形表示用のピーク(Waveform.computePeaksの結果)。ファイルごとに1回だけ計算する
   peaksRequested: {},  // fileId -> true (ピークの計算を依頼済み。二重に依頼しないため)
@@ -86,6 +91,7 @@ const el = {
   participantsCount: document.getElementById("participantsCount"),
   clipMenu: document.getElementById("clipMenu"),
   clipCutBtn: document.getElementById("clipCutBtn"),
+  trackPasteBtn: document.getElementById("trackPasteBtn"),
 };
 
 function setStatus(msg, isError = false) {
@@ -1439,7 +1445,11 @@ el.tracksContainer.addEventListener("contextmenu", (e) => {
   selectTrack(row.dataset.trackId);
   if (!isEditor()) return;
   const track = state.tracks.find((t) => t.trackId === row.dataset.trackId);
-  if (!track || track.clips.length > 0) return;
+  if (!track) return;
+  const isEmpty = track.clips.length === 0;
+  trackAddFileBtn.classList.toggle("hidden", !isEmpty);     // ファイル追加は空トラックだけ
+  trackPasteBtn.classList.toggle("hidden", !clipClipboard); // 貼り付けはコピー済みのときだけ
+  if (!isEmpty && !clipClipboard) return;                   // 出せる項目がなければメニューは出さない
   const laneRect = row.querySelector(".track-lane").getBoundingClientRect();
   const sec = Math.max(0, (e.clientX - laneRect.left) / PX_PER_SEC); // トラック名側なら0秒
   openTrackMenu(track.trackId, sec, e.clientX, e.clientY);
@@ -1449,6 +1459,52 @@ el.tracksContainer.addEventListener("contextmenu", (e) => {
 document.getElementById("clipDeleteBtn").addEventListener("click", () => {
   el.clipMenu.classList.add("hidden");
   el.deleteBtn.click(); // 上部の「削除」ボタンと同じ処理を呼ぶ
+});
+
+// ---------- 再生中は編集系機能へのアクセスをブロックする ----------
+
+function updateEditButtons() {
+  const off = state.isPlaying;
+  [el.cutBtn, el.deleteBtn, el.clipCutBtn, document.getElementById("clipDeleteBtn")].forEach((b) => {
+    if (b) b.disabled = off;
+  });
+}
+
+// ---------- コピー / 貼り付け ----------
+let clipClipboard = null; // コピーしたクリップの内容(自分の画面だけ。他の参加者とは共有しない)
+
+document.getElementById("clipCopyBtn").addEventListener("click", () => {
+  el.clipMenu.classList.add("hidden");
+  const found = state.selectedClipId && findClip(state.selectedClipId);
+  if (!found) return;
+  clipClipboard = { ...found.clip };
+  setStatus(`コピーしました: ${found.clip.filename || ""}`);
+});
+
+function pasteClipToTrack(trackId, startSec) {
+  if (!clipClipboard) return;
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  const track = state.tracks.find((t) => t.trackId === trackId);
+  if (!track) return;
+  const clip = {
+    ...clipClipboard,
+    clipId: `c${++clipCounter}`,
+    timelineStart: Math.max(0, startSec),
+    trackId,
+  };
+  track.clips.push(clip);
+  state.selectedClipId = clip.clipId;
+  renderAll();
+  syncProject();
+  setStatus("貼り付けました");
+}
+
+trackPasteBtn.addEventListener("click", () => {
+  trackMenu.classList.add("hidden");
+  pasteClipToTrack(trackMenuTarget.trackId, trackMenuTarget.sec); // 右クリックした位置に貼り付け
 });
 
 // ---------- カット / 削除 ----------
