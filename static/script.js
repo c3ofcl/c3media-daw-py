@@ -639,7 +639,7 @@ function addTrackFromResponseData(data) {
 // デモ音源(サーバーが合成した試用音源)を1つ選んでタイムラインに追加する
 async function addDemoTrack(demoId, demoName) {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   setStatus(`デモ音源を追加中: ${demoName} ...`);
@@ -666,7 +666,7 @@ async function addDemoTrack(demoId, demoName) {
 
 el.addEmptyTrackBtn.addEventListener("click", () => {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   trackCounter += 1;
@@ -681,7 +681,7 @@ el.addEmptyTrackBtn.addEventListener("click", () => {
   });
   renderAll();
   syncProject();
-  setStatus("空のトラックを追加しました");
+  setStatus("空のトラックを追加しました。トラックを右クリックすると音声ファイルを挿入できます");
 });
 
 // ---------- 「+ ファイルを追加」ドロップダウン(ファイル / デモ音源の選択) ----------
@@ -1372,7 +1372,7 @@ trackFileInput.addEventListener("change", async (e) => {
   e.target.value = "";
   if (!file) return;
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   await uploadFileToTrack(file, trackMenuTarget.trackId, state.playheadSec);
@@ -1490,7 +1490,7 @@ document.getElementById("clipCopyBtn").addEventListener("click", () => {
 function pasteClipToTrack(trackId, startSec) {
   if (!clipClipboard) return;
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   const track = state.tracks.find((t) => t.trackId === trackId);
@@ -1518,7 +1518,7 @@ trackPasteBtn.addEventListener("click", () => {
 el.clipCutBtn.addEventListener("click", () => {
   el.clipMenu.classList.add("hidden");
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   if (!state.selectedClipId) {
@@ -1558,7 +1558,7 @@ el.clipCutBtn.addEventListener("click", () => {
 
 el.cutBtn.addEventListener("click", () => {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   if (!state.selectedClipId) {
@@ -1600,7 +1600,7 @@ el.cutBtn.addEventListener("click", () => {
 
 el.deleteBtn.addEventListener("click", () => {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   if (!state.selectedClipId) {
@@ -1655,7 +1655,7 @@ function startRenameTrack(track, labelTextEl) {
 // トラック1つ分の音源ファイルをサーバーから削除し、タイムラインからも取り除く
 async function deleteTrackFile(track) {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   const fileId = track.clips[0]?.fileId;
@@ -1697,7 +1697,7 @@ async function deleteTrackFile(track) {
 // サーバーに保存されている音源ファイルを(前回セッション分も含めて)まとめて削除する
 el.clearUploadsBtn.addEventListener("click", async () => {
   if (!isEditor()) {
-    setStatus("編集権がありません", true);
+    setStatus("編集権がありません。ホストにリクエストしてください", true);
     return;
   }
   if (!confirm("サーバーに保存されている音源ファイルを全て削除します。よろしいですか?\n(現在編集中のタイムラインも空になります)")) {
