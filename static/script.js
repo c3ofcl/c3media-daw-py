@@ -66,6 +66,8 @@ const el = {
   playBtn: document.getElementById("playBtn"),
   stopBtn: document.getElementById("stopBtn"),
   masterMeterFill: document.getElementById("masterMeterFill"),
+  undoBtn: document.getElementById("undoBtn"),
+  redoBtn: document.getElementById("redoBtn"),
   cutBtn: document.getElementById("cutBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   clearUploadsBtn: document.getElementById("clearUploadsBtn"),
@@ -144,10 +146,159 @@ function myRole() {
 
 // 編集権を持つ人の操作だけをサーバーへ送信し、全員へ配信してもらう。
 // (閲覧者からの呼び出しは isEditor() チェックで何もしない)
-function syncProject() {
+function syncProject(options) {
   if (!collab.socket || !isEditor()) return;
+  if (!options || options.record !== false) commitEditHistory();
   collab.socket.emit("project_sync", { token: collab.token, tracks: state.tracks });
+  updateUndoRedoUI();
 }
+
+// ---------- 元に戻す / やり直し(Undo / Redo) ----------
+// 対象は共有されるプロジェクトの内容(トラック・クリップ・音量・ミュート/ソロなど = state.tracks)だけで、
+// ズームや再生ヘッド、選択状態のような「自分の画面だけの状態」は含まない。
+//
+// 仕組み: 編集は必ず最後に syncProject() で確定する作りなので、そこで「確定する直前の状態」を
+//   履歴に積む。個々の編集処理には手を入れておらず、今後増える編集も自動的に対象になる。
+//   変化がなければ積まない(何も変わらない操作で履歴が増えないようにするため)。
+//
+// 共同編集との関係:
+//   - 編集できるのは編集者だけなので、元に戻す/やり直しも編集者だけ。結果は通常の編集と同じく全員に同期される。
+//   - 編集権が移った/外れたときは履歴を捨てる。別の人が編集したあとに古い状態へ戻すと、その人の編集を
+//     消してしまうため。
+//   - サーバー上の音源ファイルを実際に消す操作(トラックのゴミ箱ボタン/音源を全削除)も履歴を捨てる。
+//     戻すと、存在しないファイルを指すトラックが復活して再生も書き出しもできなくなってしまうため。
+//     (クリップの削除はタイムラインから外すだけでファイルは残るので、元に戻せる)
+
+const EDIT_HISTORY_MAX = 100; // 元に戻せる最大回数
+const editHistory = {
+  past: [],            // 古い順の「確定済みの状態」(JSON文字列)。末尾が直前の状態
+  future: [],          // やり直し用。末尾が次にやり直す状態
+  lastCommitted: null, // 現在の確定済みの状態(JSON文字列)。次の編集で past に積まれる
+};
+let wasEditor = false;
+
+// キーの順序に依らず同じ内容なら同じ文字列になる JSON 化(比較用)
+function stableStringify(value) {
+  return JSON.stringify(value, (key, val) => {
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      return Object.keys(val)
+        .sort()
+        .reduce((acc, k) => {
+          acc[k] = val[k];
+          return acc;
+        }, {});
+    }
+    return val;
+  });
+}
+
+// 履歴を空にして、今の状態を基準(これより前には戻れない地点)にする
+function resetEditHistory() {
+  editHistory.past = [];
+  editHistory.future = [];
+  editHistory.lastCommitted = stableStringify(state.tracks);
+  updateUndoRedoUI();
+}
+
+// 今の状態が確定済みの状態から変わっていれば、確定済みの状態を履歴に積む
+function commitEditHistory() {
+  const now = stableStringify(state.tracks);
+  if (editHistory.lastCommitted === null) {
+    editHistory.lastCommitted = now;
+    return;
+  }
+  if (now === editHistory.lastCommitted) return;
+  editHistory.past.push(editHistory.lastCommitted);
+  if (editHistory.past.length > EDIT_HISTORY_MAX) editHistory.past.shift();
+  editHistory.future = []; // 新しく編集したら、やり直しの履歴は無効になる
+  editHistory.lastCommitted = now;
+}
+
+function restoreSnapshot(snapshot) {
+  state.tracks = JSON.parse(snapshot);
+  ensureTrackDefaults(state.tracks);
+  syncCountersFromTracks(state.tracks);
+  if (state.selectedClipId && !findClip(state.selectedClipId)) {
+    state.selectedClipId = null;
+  }
+  for (const track of state.tracks) {
+    for (const clip of track.clips) {
+      loadBuffer(clip.fileId, clip.url).catch(() => {});
+    }
+  }
+  renderAll();
+  applyLiveMixToActiveNodes(); // 再生中なら、音量・ミュート/ソロの変化もその場で音に反映する
+}
+
+function undoEdit() {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  if (editHistory.past.length === 0 || editHistory.lastCommitted === null) {
+    setStatus("これ以上元に戻せません");
+    return;
+  }
+  editHistory.future.push(editHistory.lastCommitted);
+  editHistory.lastCommitted = editHistory.past.pop();
+  restoreSnapshot(editHistory.lastCommitted);
+  syncProject({ record: false }); // 復元した状態を全員に配信する(新しい編集としては記録しない)
+  setStatus(`元に戻しました(あと${editHistory.past.length}回戻せます)`);
+}
+
+function redoEdit() {
+  if (!isEditor()) {
+    setStatus("編集権がありません", true);
+    return;
+  }
+  if (editHistory.future.length === 0 || editHistory.lastCommitted === null) {
+    setStatus("やり直せる操作がありません");
+    return;
+  }
+  editHistory.past.push(editHistory.lastCommitted);
+  editHistory.lastCommitted = editHistory.future.pop();
+  restoreSnapshot(editHistory.lastCommitted);
+  syncProject({ record: false });
+  setStatus(`やり直しました(あと${editHistory.future.length}回やり直せます)`);
+}
+
+function updateUndoRedoUI() {
+  const editing = isEditor();
+  el.undoBtn.disabled = !editing || editHistory.past.length === 0;
+  el.redoBtn.disabled = !editing || editHistory.future.length === 0;
+}
+
+el.undoBtn.addEventListener("click", undoEdit);
+el.redoBtn.addEventListener("click", redoEdit);
+
+// 文字や数値を打ち込む欄では、ブラウザ標準の取り消し(入力内容のUndo)を優先する。
+// フェーダー(range)やボタンにフォーカスがあるときは、プロジェクトのUndo/Redoとして扱う。
+function isTypingTarget(target) {
+  if (!target || !target.tagName) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    return !["range", "checkbox", "radio", "button", "submit"].includes((target.type || "").toLowerCase());
+  }
+  return false;
+}
+
+// Ctrl/⌘ + Z = 元に戻す、Ctrl/⌘ + Shift + Z または Ctrl/⌘ + Y = やり直し
+document.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.altKey) return; // 日本語入力の変換中などは何もしない
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const key = (e.key || "").toLowerCase();
+  let action = null;
+  if (key === "z") action = e.shiftKey ? "redo" : "undo";
+  else if (key === "y" && !e.shiftKey) action = "redo";
+  if (!action) return;
+  if (isTypingTarget(e.target)) return;
+  e.preventDefault();
+  if (action === "undo") undoEdit();
+  else redoEdit();
+});
+
 
 // サーバーから届いたプロジェクト状態(トラック/クリップ配置)を自分の画面に反映する
 function applyRemoteProjectState(data) {
@@ -163,6 +314,9 @@ function applyRemoteProjectState(data) {
     }
   }
   renderAll();
+  // 編集者本人の画面では、自分が確定した内容がそのまま返ってくるだけなので履歴には触らない。
+  // 他の人の編集を受け取ったとき(=編集者でないとき)は、見えている状態を新しい基準にして履歴を空にする。
+  if (!isEditor()) resetEditHistory();
 }
 
 // 古いプロジェクトデータ(volume/muted/soloフィールドが無いトラックなど)にも対応するための補完
@@ -235,6 +389,7 @@ function updateEditPermissionUI() {
   document.querySelectorAll(".track-volume-fader, .track-volume-value, .track-toggle-btn").forEach((elm) => {
     elm.disabled = !editing;
   });
+  updateUndoRedoUI();
 }
 
 // 指定トークンの人が現在host/editor/viewerのどれかを判定する(自分以外の参加者表示にも使う)
@@ -388,6 +543,12 @@ function connectSocket() {
     collab.editorToken = data.editorToken;
     collab.users = data.users || [];
     collab.pending = data.pending || [];
+    // 編集権が移った/外れたら履歴を捨てる(他の人の編集を、古い状態で上書きしてしまわないため)
+    const nowEditor = isEditor();
+    if (nowEditor !== wasEditor) {
+      wasEditor = nowEditor;
+      resetEditHistory();
+    }
     renderCollabBar();
     updateEditPermissionUI();
   });
@@ -1692,6 +1853,8 @@ async function deleteTrackFile(track) {
   setStatus(`削除しました: ${track.label}`);
   renderAll();
   syncProject();
+  // サーバーのファイルを実際に消した場合は、元に戻しても音源が無いので履歴を捨てる
+  if (fileId) resetEditHistory();
 }
 
 // サーバーに保存されている音源ファイルを(前回セッション分も含めて)まとめて削除する
@@ -1723,6 +1886,7 @@ el.clearUploadsBtn.addEventListener("click", async () => {
     setStatus(`削除しました(${data.deleted ?? 0}件)`);
     renderAll();
     syncProject();
+    resetEditHistory(); // 全音源をサーバーから消したので、これより前には戻せない
   } catch (err) {
     setStatus(`通信エラー: ${err}`, true);
   }
